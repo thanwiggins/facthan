@@ -1,0 +1,39 @@
+name: Build and Release Minecraft Mod
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers the automation whenever you push a version tag (like v1.0.0, v1.1, etc.)
+
+permissions:
+  contents: write # Grants the cloud server permission to create a Release page and upload files
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin' # Installs the correct Java 17 build environment
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4 # Speeds up future builds by caching common files
+
+      - name: Grant Execute Permission to Gradlew
+        run: chmod +x gradlew
+
+      - name: Build Mod .JAR
+        run: ./gradlew build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/libs/*.jar # Tells GitHub to grab any .jar file created during the build
+          generate_release_notes: true # Automatically list your commit messages on the release page
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Automatically provided secure authentication key
