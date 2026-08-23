@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.thanwiggins.facthan.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "facthan.refmap.json",
+  "mixins": [
+    "MinecraftServerMixin",
+    "MinecraftServerAccessor"
+  ],
+  "client": [
+    "MinecraftAccessor",
+    "MinecraftCrashRedirectMixin",
+    "WorldOpenFlowsRetryMixin"
+  ],
+  "server": []
+}

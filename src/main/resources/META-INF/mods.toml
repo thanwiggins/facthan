@@ -22,3 +22,16 @@ description='''${mod_description}'''
     versionRange="${minecraft_version_range}"
     ordering="NONE"
     side="BOTH"
+
+# Optional - Than's Worldborder (https://github.com/thanwiggins/worldborder). When present, the
+# playable-world bound used by the capital search is read from it instead of Facthan's own
+# fallbackWorldBorderRadius default (see WorldBorderCompat).
+[[dependencies.${mod_id}]]
+    modId="worldborder"
+    mandatory=false
+    versionRange=""
+    ordering="AFTER"
+    side="BOTH"
+
+[[mixins]]
+    config="facthan.mixins.json"

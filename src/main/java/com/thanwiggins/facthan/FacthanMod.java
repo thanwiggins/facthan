@@ -10,10 +10,11 @@ public class FacthanMod {
     public static final String MODID = "facthan";
 
     public FacthanMod() {
-        // COMMON, not CLIENT - structure placement only ever runs on whichever process is actually
-        // generating the chunk (the dedicated server, or the integrated server in singleplayer), so
-        // only that process's own copy of these settings can ever matter. See PoliticalConfig.
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, PoliticalConfig.SPEC);
+        // COMMON, not CLIENT - the capital/realm search only ever runs on whichever process is
+        // actually generating the world (the dedicated server, or the integrated server in
+        // singleplayer), so only that process's own copy of these settings can ever matter. See
+        // KingdomConfig.
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, KingdomConfig.SPEC);
 
         ModStructurePlacementTypes.PLACEMENT_TYPES.register(FMLJavaModLoadingContext.get().getModEventBus());
     }

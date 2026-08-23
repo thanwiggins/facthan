@@ -1,70 +1,78 @@
 # Facthan
 
-A Minecraft Forge mod that turns structure generation into a political map. Structures can be
-assigned a **faction**, and faction-owned structures generate only inside dense, contiguous
-"kingdom" territories with an empty no-man's-land buffer between them - instead of being
-scattered evenly across the world the way vanilla `random_spread` placement normally works.
-Every world seed produces a completely unique set of kingdom borders, computed purely from that
-seed. Nothing is ever persisted to disk - the political map for a given seed is always
-recomputable, identically, on demand.
+A Minecraft Forge mod that turns structure generation into a deterministic "kingdom generator."
+Once per world, before any chunk ever generates, Facthan picks a set of factions, force-generates
+each one's **capital** structure at a location that satisfies your distance rules and actually
+passes real structure generation (not just a biome check) - no exceptions - then scatters a random
+set of that faction's other ("supporting") structures around the capital in a realm. Everything
+else (factions that weren't picked this world, and any structure with no faction at all) generates
+exactly as vanilla `random_spread` always has.
 
-This mod only ever acts as a *political* check. It has no opinion on biome suitability or any
-other placement rule - those all run exactly as they would without this mod installed, whether
-they come from vanilla or another structure mod.
+This is a hard departure from a purely-computed "political map" - a capital's and a realm's exact
+locations are decided once and persisted, so they survive server restarts.
 
 ## Features
 
-- **Voronoi kingdoms** - a jittered-grid cellular (Voronoi/Worley) noise, seeded from the world
-  seed, deterministically partitions the map into organic region cells. No biome tags, no
-  hardcoded regions - a pure function of the seed.
-- **Hard borders with buffer zones** - a faction structure that would generate too close to a
-  kingdom's border simply doesn't generate at all, so kingdoms read as dense, defined centers
-  surrounded by contested wilderness rather than fading gradients.
-- **Structures with no faction are untouched** - opting a `structure_set` into this system is
-  per-structure-set and explicit; everything else generates exactly as it always has.
-- **Mod-agnostic** - works with any structure from any mod, since it operates purely on
-  `structure_set` placement, not on any mod-specific structure logic.
-- **Queryable** - `/political` reports which faction (if any) owns a position and how close it is
-  to a border, giving a stable, seed-derived contract for future consumers (e.g. a map-mod overlay)
-  without needing anything written to disk.
+- **Guaranteed capital placement** - drives the same structure-generation code vanilla's own
+  `/place structure` command uses, so validating a location ("does this actually fit here?") and
+  placing it happen in one step, independent of the normal `structure_set` spacing pipeline.
+- **Realm building** - each capital gets a random number of non-capital structures from its
+  faction scattered in an annulus around it, each respecting a minimum separation from the others.
+- **Seed-flush, done safely** - if valid capital locations can't be found after repeated tries on
+  one seed, the incomplete world is discarded and silently recreated with a new seed instead of
+  either generating a half-decided kingdom or crashing the game; this is bounded, so a genuinely
+  impossible configuration still surfaces as a real error instead of retrying forever.
+- **Unselected factions are unrestricted** - a registered faction that isn't chosen as a capital
+  this world places its structures exactly like plain `minecraft:random_spread`, no territory
+  concept at all.
+- **Optional Worldborder integration** - if
+  [Than's Worldborder](https://github.com/thanwiggins/worldborder) is installed and its custom
+  overworld border is enabled, the capital search stays inside it; otherwise it falls back to a
+  configurable default radius.
+- **Mod-agnostic** - operates purely on `structure_set` placement and vanilla structure generation,
+  so it works with any structure from any mod.
 
 ## Requirements
 
 - Minecraft 1.20.1
 - Forge 47.3.0+
 
-No other dependencies - this mod is fully self-contained.
+No other dependencies - Than's Worldborder is optional and only changes the search's world-border
+bound when present.
 
 ## Installation
 
 1. Install Forge for Minecraft 1.20.1.
 2. Drop `facthan-<version>.jar` into your `mods` folder.
 3. Launch the game once to generate `config/facthan-common.toml`.
-4. Define at least one faction and opt a `structure_set` into it (see Configuration below), then
-   set `politicalMapEnabled = true`.
+4. Define your factions and their structures via a datapack (see Configuration below).
+5. Create a new world. The capital search runs automatically on the "Building world" loading
+   screen, before any spawn chunk generates - nothing else to trigger.
 
-The mod does nothing at all until both a faction is registered and `politicalMapEnabled` is
-turned on.
-
-## Usage
-
-| Command | Effect |
-|---|---|
-| `/political` | Reports which faction owns your current position, and its distance to the nearest border. |
-| `/political <x> <z>` | Same, for an arbitrary column. |
+The mod does nothing to a world unless at least one faction has an `is_capital` structure_set
+registered (see below).
 
 ## Configuration
 
 ### `config/facthan-common.toml`
-A COMMON-type config, not CLIENT - structure placement only ever runs on whichever process is
-actually generating the chunk (the dedicated server, or the integrated server in singleplayer), so
+A COMMON-type config, not CLIENT - the capital/realm search only ever runs on whichever process is
+actually generating the world (the dedicated server, or the integrated server in singleplayer), so
 only that process's own copy of these settings can ever matter.
-- `politicalMapEnabled` (default `false`) - master switch for the whole system.
-- `cellSize` (default `4000`) - average width, in blocks, of one kingdom before jitter. Larger
-  values produce fewer, bigger kingdoms; smaller values produce more, smaller ones.
-- `borderBufferWidth` (default `200`) - width, in blocks, of the no-man's-land straddling every
-  border. A faction structure whose approximate distance to the nearest border is under this value
-  never generates.
+
+- `capitalCount` (default `3`) - how many factions get a capital this world. Clamped down to
+  however many factions actually have an `is_capital` structure_set registered, if fewer.
+- `minDistanceFromOrigin` (default `250`) - minimum distance, in blocks, a capital may be from
+  the world origin.
+- `minDistanceBetweenCapitals` (default `500`) - minimum distance, in blocks, a capital may be
+  from every other capital.
+- `minSupportingStructures` / `maxSupportingStructures` (default `3` / `5`) - how many additional
+  structures are placed in each realm.
+- `minSupportingStructureRange` / `maxSupportingStructureRange` (default `100` / `200`) - how far
+  a supporting structure may be from its capital.
+- `minSupportingStructureSeparation` (default `50`) - minimum distance a supporting structure must
+  be from every other supporting structure already placed in the same realm.
+- `fallbackWorldBorderRadius` (default `1000`) - used only when Than's Worldborder isn't installed
+  or its custom overworld border is disabled.
 
 ### Defining factions
 Register a faction with a `data/<namespace>/political_factions/<id>.json` file in any datapack:
@@ -72,28 +80,40 @@ Register a faction with a `data/<namespace>/political_factions/<id>.json` file i
 { "display_name": "Kingdom of Embers", "color": "#B33A2E" }
 ```
 The file's own location (`<namespace>:<id>`) is the faction's id. Any number of datapacks can each
-contribute factions. Registering a faction here is what makes it eligible to actually receive
-Voronoi territory - a `structure_set` referencing a faction that was never registered this way will
-simply never generate anywhere, rather than silently ignoring the restriction.
+contribute factions.
 
-### Opting a structure set into a faction
+### Designating a faction's structures
 Use the `facthan:faction_spread` placement type in a `structure_set` JSON instead of
-`minecraft:random_spread`, adding one extra field:
+`minecraft:random_spread`, adding two fields - `faction` (as before) and `is_capital`:
 ```json
 {
-  "structures": [{ "structure": "minecraft:village_plains", "weight": 1.0 }],
+  "structures": [{ "structure": "<namespace>:throne_hall", "weight": 1.0 }],
   "placement": {
     "type": "facthan:faction_spread",
     "salt": 12345,
-    "spacing": 24,
-    "separation": 8,
-    "faction": "<namespace>:<id>"
+    "spacing": 1,
+    "separation": 0,
+    "faction": "<namespace>:<id>",
+    "is_capital": true
   }
 }
 ```
-Every other `random_spread` field (`spacing`, `separation`, `salt`, `frequency`, `locate_offset`,
-`exclusion_zone`, `spread_type`) works exactly as it does today - `faction` is the only addition.
-A structure set left on `minecraft:random_spread` is entirely unaffected by this mod.
+Give each faction exactly one `is_capital: true` structure_set (its capital) and as many
+`is_capital: false` (the default, so the field can simply be omitted) structure_sets as you like
+(its supporting structures - repeats across a single realm are allowed). If this faction is
+selected as a capital-faction this world, every one of these structure_sets is placed *only* by
+the capital/realm search - normal generation is vetoed for all of them, no exceptions. If it's
+*not* selected, they're all completely unrestricted, exactly like plain `random_spread`.
+
+`spacing`, `separation`, `salt`, `frequency`, `locate_offset`, `exclusion_zone`, and `spread_type`
+are still inherited from `random_spread` and still matter for a faction that *isn't* selected as a
+capital this world.
+
+## Mod Interactions
+
+**Than's Worldborder** ([github.com/thanwiggins/worldborder](https://github.com/thanwiggins/worldborder)) -
+optional. When installed with its custom overworld border enabled, the capital search stays inside
+that bound instead of `fallbackWorldBorderRadius`.
 
 ## License
 
