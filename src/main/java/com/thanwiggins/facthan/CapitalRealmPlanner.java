@@ -12,6 +12,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.StructureManager;
+import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
@@ -31,13 +32,42 @@ import java.util.Map;
 // The heart of the "kingdom generator" pivot (see desired-results.md): once per world, before any
 // chunk generates, deterministically picks a set of capital factions, force-generates each one's
 // capital structure at a validated location, then scatters each capital's supporting structures
-// around it. Invoked from MinecraftServerMixin's injection into MinecraftServer#prepareLevels -
-// see that class for exactly why that hook point (and not a Forge lifecycle event) is the right one.
+// around it - guaranteed, not deferred (see FactionStructurePlacement for why the "let vanilla's own
+// pipeline pick it up later" alternative was dropped: it depends on a separately-loaded mod's own
+// structure_set never independently competing for the same structure, which isn't something this
+// mod can control or verify).
+//
+// Everything is *validated* first, with zero side effects (see validateOnly/validateBatch), for the
+// entire batch - capitals AND every realm's supporting structures - before a single block gets
+// written. Only once a full batch validates does forceGenerateBatch actually write it all. This
+// fixes two real bugs the original version of this class had:
+//   1. Force-generation only ever called placeInChunk once, for the origin chunk, with a small
+//      hardcoded +/-6 block box - so any structure bigger than one chunk (any castle) only ever got
+//      its origin chunk's slice written; the rest silently generated as plain terrain. Verified
+//      against vanilla's actual "/place structure" command (decompiled): it loops placeInChunk once
+//      per chunk in the structure's real bounding box, each time with that chunk's own full-height
+//      bounding box - now done identically here.
+//   2. The per-faction placement veto (see FactionStructurePlacement) only ever activated at the very
+//      end, after every capital and every realm structure had already been force-generated - so while
+//      a faction's OWN capital was still being written, its other, not-yet-vetoed structure_sets could
+//      still independently fire via their ordinary spacing grid, forced into existence by this same
+//      routine's own chunk-loading, producing extra/duplicated copies. Now the veto is activated (via
+//      KingdomSavedData.reserveFactions) the moment the full capital set is validated, strictly before
+//      any force-generation begins.
+// A side effect of validating everything before writing anything: a failed attempt (a later capital
+// or realm structure that can't find a spot) never leaves earlier, already-force-generated structures
+// from that same failed attempt orphaned in the world - there's nothing to clean up, because nothing
+// was written until the whole batch succeeded.
+//
+// Invoked from MinecraftServerMixin's injection into MinecraftServer#prepareLevels - see that class
+// for exactly why that hook point (and not a Forge lifecycle event) is the right one.
 public final class CapitalRealmPlanner {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_CAPITAL_SEARCH_ATTEMPTS = 10;
     private static final int MAX_CAPITAL_LOCATION_ROLLS = 64;
     private static final int MAX_SUPPORTING_STRUCTURE_RETRIES = 5;
+
+    private record Placement(BlockPos pos, Structure structure) {}
 
     private CapitalRealmPlanner() {}
 
@@ -45,6 +75,18 @@ public final class CapitalRealmPlanner {
         ServerLevel overworld = server.overworld();
         KingdomSavedData data = KingdomSavedData.get(overworld);
         if (data.isFinalized()) return;
+
+        // ChunkStatus.STRUCTURE_STARTS's own generation task is gated on this - but we don't go
+        // through that task at all, we call Structure.generate()/placeInChunk() directly, so without
+        // this check we'd force-generate capitals into a world that globally can never have any
+        // OTHER structure either, which would be a very confusing, inconsistent result.
+        if (!server.getWorldData().worldGenOptions().generateStructures()) {
+            LOGGER.error("This world was created with \"Generate Structures\" disabled - Facthan cannot " +
+                    "place any capitals or realms. Recreate the world with that option enabled if you want " +
+                    "kingdom generation to do anything.");
+            data.markFinalized();
+            return;
+        }
 
         List<ResourceLocation> registeredFactions = FactionRegistry.orderedFactionIds();
         if (registeredFactions.isEmpty()) {
@@ -67,11 +109,11 @@ public final class CapitalRealmPlanner {
         FactionStructures structures = FactionStructures.gather(server.registryAccess());
         WorldBorderCompat.Bounds bounds = WorldBorderCompat.overworldBounds();
 
-        Map<ResourceLocation, BlockPos> capitals = null;
+        Map<ResourceLocation, Placement> capitals = null;
         for (int attempt = 1; attempt <= MAX_CAPITAL_SEARCH_ATTEMPTS; attempt++) {
-            KingdomBootStatus.set("Placing capitals (attempt " + attempt + "/" + MAX_CAPITAL_SEARCH_ATTEMPTS + ")...");
+            KingdomBootStatus.set("Searching for capital locations (attempt " + attempt + "/" + MAX_CAPITAL_SEARCH_ATTEMPTS + ")...");
             RandomSource random = RandomSource.create(mixSeed(overworld.getSeed(), attempt));
-            capitals = tryPlaceCapitals(server, overworld, structures, registeredFactions, capitalCount, bounds, random);
+            capitals = tryValidateCapitals(server, overworld, structures, registeredFactions, capitalCount, bounds, random);
             if (capitals != null) break;
         }
 
@@ -82,16 +124,31 @@ public final class CapitalRealmPlanner {
             throw new KingdomGenerationAbortedException(message);
         }
 
-        for (Map.Entry<ResourceLocation, BlockPos> entry : capitals.entrySet()) {
-            data.putCapital(entry.getKey(), entry.getValue());
+        // Lock these factions out of normal placement NOW, strictly before any force-generation -
+        // otherwise our own forced chunk-loading below could still trigger one of these factions'
+        // other, not-yet-vetoed structure_sets via their ordinary spacing grid.
+        KingdomSavedData.reserveFactions(capitals.keySet());
+
+        Map<ResourceLocation, List<Placement>> realms = new LinkedHashMap<>();
+        for (Map.Entry<ResourceLocation, Placement> entry : capitals.entrySet()) {
+            ResourceLocation faction = entry.getKey();
+            KingdomBootStatus.set("Searching for " + faction + "'s realm structures...");
+            RandomSource realmRandom = RandomSource.create(mixSeed(overworld.getSeed(), faction.toString().hashCode()));
+            realms.put(faction, validateRealm(server, overworld, structures, faction, entry.getValue().pos(), realmRandom));
         }
 
-        for (Map.Entry<ResourceLocation, BlockPos> entry : capitals.entrySet()) {
+        for (Map.Entry<ResourceLocation, Placement> entry : capitals.entrySet()) {
             ResourceLocation faction = entry.getKey();
-            BlockPos capitalPos = entry.getValue();
-            KingdomBootStatus.set("Populating " + faction + "'s realm...");
-            RandomSource realmRandom = RandomSource.create(mixSeed(overworld.getSeed(), faction.toString().hashCode()));
-            buildRealm(server, overworld, data, structures, faction, capitalPos, realmRandom);
+            Placement capital = entry.getValue();
+            KingdomBootStatus.set("Generating " + faction + "'s capital and realm...");
+
+            forceGenerate(overworld, capital.structure(), capital.pos());
+            data.putCapital(faction, capital.pos());
+
+            for (Placement supporting : realms.getOrDefault(faction, List.of())) {
+                forceGenerate(overworld, supporting.structure(), supporting.pos());
+                data.addSupportingStructure(faction, supporting.pos());
+            }
         }
 
         data.markFinalized();
@@ -99,10 +156,11 @@ public final class CapitalRealmPlanner {
         LOGGER.info("Kingdom generation finalized: {} capital(s) placed.", capitals.size());
     }
 
-    // One full attempt to place every selected capital on a single derived RNG stream - returns
-    // null (never partial results) the moment any capital can't find a valid spot, so the caller
-    // knows to retry the whole batch with a fresh attempt seed.
-    private static Map<ResourceLocation, BlockPos> tryPlaceCapitals(MinecraftServer server, ServerLevel overworld,
+    // One full attempt to validate a location for every selected capital on a single derived RNG
+    // stream - returns null (never partial results) the moment any capital can't find a valid spot,
+    // so the caller knows to retry the whole batch with a fresh attempt seed. Pure validation, no
+    // side effects - nothing gets written to the world here.
+    private static Map<ResourceLocation, Placement> tryValidateCapitals(MinecraftServer server, ServerLevel overworld,
             FactionStructures structures, List<ResourceLocation> registeredFactions, int capitalCount,
             WorldBorderCompat.Bounds bounds, RandomSource random) {
         List<ResourceLocation> eligible = new ArrayList<>();
@@ -119,7 +177,7 @@ public final class CapitalRealmPlanner {
         shuffle(eligible, random);
         List<ResourceLocation> selected = eligible.subList(0, capitalCount);
 
-        Map<ResourceLocation, BlockPos> placed = new LinkedHashMap<>();
+        Map<ResourceLocation, Placement> placed = new LinkedHashMap<>();
         int minDistanceFromOrigin = KingdomConfig.MIN_DISTANCE_FROM_ORIGIN.get();
         int minDistanceBetweenCapitals = KingdomConfig.MIN_DISTANCE_BETWEEN_CAPITALS.get();
 
@@ -132,11 +190,11 @@ public final class CapitalRealmPlanner {
                 int z = random.nextIntBetweenInclusive(bounds.minZ(), bounds.maxZ());
 
                 if (distance(x, z, 0, 0) < minDistanceFromOrigin) continue;
-                if (tooCloseToAny(x, z, placed.values(), minDistanceBetweenCapitals)) continue;
+                if (tooCloseToAny(positionsOf(placed.values()), x, z, minDistanceBetweenCapitals)) continue;
 
                 BlockPos target = new BlockPos(x, 0, z);
-                if (forceGenerate(server, overworld, capitalStructure, target)) {
-                    placed.put(faction, target);
+                if (validateOnly(server, overworld, capitalStructure, target)) {
+                    placed.put(faction, new Placement(target, capitalStructure));
                     found = true;
                 }
             }
@@ -147,10 +205,12 @@ public final class CapitalRealmPlanner {
         return placed;
     }
 
-    private static void buildRealm(MinecraftServer server, ServerLevel overworld, KingdomSavedData data,
+    // Same idea as tryValidateCapitals, for one capital's realm - pure validation, no side effects.
+    // A slot that never finds a spot within its retry budget is silently dropped (no world flush).
+    private static List<Placement> validateRealm(MinecraftServer server, ServerLevel overworld,
             FactionStructures structures, ResourceLocation faction, BlockPos capitalPos, RandomSource random) {
         List<Structure> pool = structures.supportingStructures().get(faction);
-        if (pool == null || pool.isEmpty()) return;
+        if (pool == null || pool.isEmpty()) return List.of();
 
         int count = random.nextIntBetweenInclusive(
                 KingdomConfig.MIN_SUPPORTING_STRUCTURES.get(), KingdomConfig.MAX_SUPPORTING_STRUCTURES.get());
@@ -158,7 +218,7 @@ public final class CapitalRealmPlanner {
         int maxRange = KingdomConfig.MAX_SUPPORTING_STRUCTURE_RANGE.get();
         int minSeparation = KingdomConfig.MIN_SUPPORTING_STRUCTURE_SEPARATION.get();
 
-        List<BlockPos> placedThisRealm = new ArrayList<>();
+        List<Placement> placedThisRealm = new ArrayList<>();
 
         for (int slot = 0; slot < count; slot++) {
             // Repeats of the same structure type within one realm are allowed by design - keep the
@@ -172,12 +232,11 @@ public final class CapitalRealmPlanner {
                 int x = capitalPos.getX() + (int) Math.round(Math.cos(angle) * range);
                 int z = capitalPos.getZ() + (int) Math.round(Math.sin(angle) * range);
 
-                if (tooCloseToAny(x, z, placedThisRealm, minSeparation)) continue;
+                if (tooCloseToAny(positionsOf(placedThisRealm), x, z, minSeparation)) continue;
 
                 BlockPos target = new BlockPos(x, 0, z);
-                if (forceGenerate(server, overworld, structure, target)) {
-                    placedThisRealm.add(target);
-                    data.addSupportingStructure(faction, target);
+                if (validateOnly(server, overworld, structure, target)) {
+                    placedThisRealm.add(new Placement(target, structure));
                     placed = true;
                 }
             }
@@ -186,13 +245,29 @@ public final class CapitalRealmPlanner {
                 LOGGER.warn("Gave up on a supporting structure for {} after {} retries.", faction, MAX_SUPPORTING_STRUCTURE_RETRIES);
             }
         }
+
+        return placedThisRealm;
     }
 
-    // The actual force-generation: drives Structure.generate directly (the same code path vanilla's
-    // own "/place structure" command uses), independent of the structure_set placement pipeline. A
-    // failed generation attempt (an invalid StructureStart) IS the "does this meet all the criteria"
-    // check - there's no separate biome-only pre-check.
-    private static boolean forceGenerate(MinecraftServer server, ServerLevel overworld, Structure structure, BlockPos target) {
+    private static boolean tooCloseToAny(Iterable<BlockPos> positions, int x, int z, int minDistance) {
+        for (BlockPos other : positions) {
+            if (distance(x, z, other.getX(), other.getZ()) < minDistance) return true;
+        }
+        return false;
+    }
+
+    private static Iterable<BlockPos> positionsOf(Iterable<Placement> placements) {
+        List<BlockPos> positions = new ArrayList<>();
+        for (Placement p : placements) positions.add(p.pos());
+        return positions;
+    }
+
+    // Validation only - never places a single block or forces a chunk to load. Matches
+    // ChunkGenerator#tryGenerateStructure's own predicate (structure.biomes()::contains) rather than
+    // /place structure's deliberate "always valid" bypass, per this design's "meets ALL the criteria
+    // for generation" requirement (see desired-results.md) - a capital should only ever land somewhere
+    // that would have generated there naturally, we're just not leaving it to chance.
+    private static boolean validateOnly(MinecraftServer server, ServerLevel overworld, Structure structure, BlockPos target) {
         ServerChunkCache chunkSource = overworld.getChunkSource();
         ChunkGenerator generator = chunkSource.getGenerator();
         RandomState randomState = chunkSource.randomState();
@@ -201,32 +276,53 @@ public final class CapitalRealmPlanner {
 
         StructureStart start = structure.generate(
                 server.registryAccess(), generator, generator.getBiomeSource(), randomState,
-                templateManager, overworld.getSeed(), chunkPos, 0, overworld, biome -> true
+                templateManager, overworld.getSeed(), chunkPos, 0, overworld, structure.biomes()::contains
         );
 
-        if (!start.isValid()) return false;
+        return start.isValid();
+    }
+
+    // The actual force-generation, run only after the whole batch (this capital and every one of its
+    // realm's supporting structures) has already validated. Drives Structure.generate() directly (the
+    // same code path vanilla's own "/place structure" command uses) and then places it - but, unlike
+    // the buggy original version of this method, loops placeInChunk once per chunk the structure's
+    // real bounding box touches, each time with THAT chunk's own full-height bounding box, exactly
+    // matching /place structure's decompiled behavior. A single placeInChunk call for only the origin
+    // chunk (what this used to do) is why a structure bigger than one chunk - any castle - only ever
+    // got a fragment of itself written.
+    private static void forceGenerate(ServerLevel overworld, Structure structure, BlockPos target) {
+        ServerChunkCache chunkSource = overworld.getChunkSource();
+        ChunkGenerator generator = chunkSource.getGenerator();
+        RandomState randomState = chunkSource.randomState();
+        ChunkPos originChunk = new ChunkPos(target);
+
+        // Re-generate (not re-validate) at real-generation time - same deterministic inputs as
+        // validateOnly, so this is guaranteed to succeed given validateOnly already did.
+        StructureStart start = structure.generate(
+                overworld.registryAccess(), generator, generator.getBiomeSource(), randomState,
+                overworld.getServer().getStructureManager(), overworld.getSeed(), originChunk, 0, overworld,
+                structure.biomes()::contains
+        );
+
+        if (!start.isValid()) {
+            LOGGER.error("A location for {} validated during the search but failed to regenerate identically " +
+                    "at force-generation time at {} - this should not be possible; please report this.", structure, target);
+            return;
+        }
 
         BoundingBox box = start.getBoundingBox();
         ChunkPos minChunk = new ChunkPos(SectionPos.blockToSectionCoord(box.minX()), SectionPos.blockToSectionCoord(box.minZ()));
         ChunkPos maxChunk = new ChunkPos(SectionPos.blockToSectionCoord(box.maxX()), SectionPos.blockToSectionCoord(box.maxZ()));
 
         StructureManager structureManager = overworld.structureManager();
-        ChunkPos.rangeClosed(minChunk, maxChunk).forEach(cp ->
-                structureManager.setStartForStructure(SectionPos.of(cp, 0), structure, start, overworld.getChunk(cp.x, cp.z)));
-
-        start.placeInChunk(overworld, structureManager, generator, overworld.getRandom(),
-                new BoundingBox(target.getX() - 6, overworld.getMinBuildHeight(), target.getZ() - 6,
-                        target.getX() + 6, overworld.getMaxBuildHeight(), target.getZ() + 6),
-                chunkPos);
-
-        return true;
-    }
-
-    private static boolean tooCloseToAny(int x, int z, Iterable<BlockPos> others, int minDistance) {
-        for (BlockPos other : others) {
-            if (distance(x, z, other.getX(), other.getZ()) < minDistance) return true;
-        }
-        return false;
+        ChunkPos.rangeClosed(minChunk, maxChunk).forEach(chunkPos -> {
+            ChunkAccess chunk = overworld.getChunk(chunkPos.x, chunkPos.z);
+            structureManager.setStartForStructure(SectionPos.of(chunkPos, 0), structure, start, chunk);
+            start.placeInChunk(overworld, structureManager, generator, overworld.getRandom(),
+                    new BoundingBox(chunkPos.getMinBlockX(), overworld.getMinBuildHeight(), chunkPos.getMinBlockZ(),
+                            chunkPos.getMaxBlockX(), overworld.getMaxBuildHeight(), chunkPos.getMaxBlockZ()),
+                    chunkPos);
+        });
     }
 
     private static double distance(int x1, int z1, int x2, int z2) {
@@ -256,7 +352,7 @@ public final class CapitalRealmPlanner {
 
     // Gathers, once per attempt-batch, which structure_set is each faction's capital and which
     // structure_sets are its non-capital ("supporting") structures - derived purely from which
-    // structure_sets in the registry use "mcaichat:faction_spread" with a matching "faction" field,
+    // structure_sets in the registry use "facthan:faction_spread" with a matching "faction" field,
     // per FactionStructurePlacement. A structure_set's own weighted entries are respected as-is.
     private record FactionStructures(Map<ResourceLocation, List<Structure>> capitalStructures,
                                       Map<ResourceLocation, List<Structure>> supportingStructures) {

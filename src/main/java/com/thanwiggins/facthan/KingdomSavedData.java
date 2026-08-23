@@ -43,6 +43,15 @@ public class KingdomSavedData extends SavedData {
         return finalizedFactionsCache.contains(faction);
     }
 
+    // Activates the placement veto for these factions immediately, well before markFinalized()
+    // persists anything - called the moment the full capital set has validated (see
+    // CapitalRealmPlanner), strictly before any force-generation begins, so this mod's own forced
+    // chunk-loading during that force-generation can't still trigger one of these factions' other,
+    // otherwise-eligible structure_sets via their ordinary spacing grid.
+    public static void reserveFactions(Set<ResourceLocation> factions) {
+        finalizedFactionsCache = Set.copyOf(factions);
+    }
+
     private void refreshCache() {
         finalizedFactionsCache = finalized ? Set.copyOf(capitals.keySet()) : Set.of();
     }
