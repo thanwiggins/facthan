@@ -45,12 +45,12 @@ bound when present.
 1. Install Forge for Minecraft 1.20.1.
 2. Drop `facthan-<version>.jar` into your `mods` folder.
 3. Launch the game once to generate `config/facthan-common.toml`.
-4. Define your factions' structures via a datapack, and assign them to factions via
-   `config/facthan-common.toml` (see Configuration below).
+4. Define your factions and their structures via a datapack (see Configuration below).
 5. Create a new world. The capital search runs automatically on the "Building world" loading
    screen, before any spawn chunk generates - nothing else to trigger.
 
-The mod does nothing to a world unless `structureAssignments` has at least one `capital` entry.
+The mod does nothing to a world unless at least one faction has an `is_capital` structure_set
+registered (see below).
 
 ## Configuration
 
@@ -60,7 +60,7 @@ actually generating the world (the dedicated server, or the integrated server in
 only that process's own copy of these settings can ever matter.
 
 - `capitalCount` (default `3`) - how many factions get a capital this world. Clamped down to
-  however many factions actually have a `capital` entry in `structureAssignments`, if fewer.
+  however many factions actually have an `is_capital` structure_set registered, if fewer.
 - `minDistanceFromOrigin` (default `250`) - minimum distance, in blocks, a capital may be from
   the world origin.
 - `minDistanceBetweenCapitals` (default `500`) - minimum distance, in blocks, a capital may be
@@ -76,12 +76,18 @@ only that process's own copy of these settings can ever matter.
 - `flushXaeroMapCache` (default `true`) - deletes any Xaero's Minimap/World Map cache folder found
   in a brand new world's save directory right after capitals/realms are force-generated, so a
   force-generated capital doesn't show up on the map before it's ever been explored.
-- `structureAssignments` (default empty) - which faction each `facthan:faction_spread` structure_set
-  belongs to, and whether it's that faction's capital or one of its supporting structures. See below.
+
+### Defining factions
+Register a faction with a `data/<namespace>/political_factions/<id>.json` file in any datapack:
+```json
+{ "display_name": "Kingdom of Embers", "color": "#B33A2E" }
+```
+The file's own location (`<namespace>:<id>`) is the faction's id. Any number of datapacks can each
+contribute factions.
 
 ### Designating a faction's structures
 Use the `facthan:faction_spread` placement type in a `structure_set` JSON instead of
-`minecraft:random_spread` - its fields are otherwise identical to `random_spread`'s own:
+`minecraft:random_spread`, adding two fields - `faction` (as before) and `is_capital`:
 ```json
 {
   "structures": [{ "structure": "<namespace>:throne_hall", "weight": 1.0 }],
@@ -89,29 +95,22 @@ Use the `facthan:faction_spread` placement type in a `structure_set` JSON instea
     "type": "facthan:faction_spread",
     "salt": 12345,
     "spacing": 1,
-    "separation": 0
+    "separation": 0,
+    "faction": "<namespace>:<id>",
+    "is_capital": true
   }
 }
 ```
-Then, in `config/facthan-common.toml`'s `structureAssignments` list, add one entry per structure_set
-declaring which faction it belongs to and whether it's that faction's capital:
-```toml
-structureAssignments = [
-    "<namespace>:<faction_id> capital <namespace>:<capital_structure_set_id>",
-    "<namespace>:<faction_id> supporting <namespace>:<other_structure_set_id>"
-]
-```
-A faction's own identity is whatever id you use here - there's no separate faction-registration file
-anymore. Give each faction at most one `capital` entry and as many `supporting` entries as you like
-(its supporting structures - repeats across a single realm are allowed). If this faction is selected
-as a capital-faction this world, every one of these structure_sets is placed *only* by the
-capital/realm search - normal generation is vetoed for all of them, no exceptions. If it's *not*
-selected, they're all completely unrestricted, exactly like plain `random_spread`. A faction with no
-`capital` entry is registered but can never be selected as a capital faction.
+Give each faction exactly one `is_capital: true` structure_set (its capital) and as many
+`is_capital: false` (the default, so the field can simply be omitted) structure_sets as you like
+(its supporting structures - repeats across a single realm are allowed). If this faction is
+selected as a capital-faction this world, every one of these structure_sets is placed *only* by
+the capital/realm search - normal generation is vetoed for all of them, no exceptions. If it's
+*not* selected, they're all completely unrestricted, exactly like plain `random_spread`.
 
 `spacing`, `separation`, `salt`, `frequency`, `locate_offset`, `exclusion_zone`, and `spread_type`
-are still inherited from `random_spread`, still live on the structure_set's own JSON (not in config),
-and still matter for a faction that *isn't* selected as a capital this world.
+are still inherited from `random_spread` and still matter for a faction that *isn't* selected as a
+capital this world.
 
 ## Mod Interactions
 

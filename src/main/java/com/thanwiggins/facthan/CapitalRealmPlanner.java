@@ -19,6 +19,7 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
+import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 import org.slf4j.Logger;
 
@@ -87,7 +88,7 @@ public final class CapitalRealmPlanner {
             return;
         }
 
-        List<ResourceLocation> registeredFactions = FactionStructureAssignments.orderedFactionIds();
+        List<ResourceLocation> registeredFactions = FactionRegistry.orderedFactionIds();
         if (registeredFactions.isEmpty()) {
             LOGGER.info("No political factions registered - skipping kingdom generation.");
             data.markFinalized();
@@ -386,26 +387,23 @@ public final class CapitalRealmPlanner {
     }
 
     // Gathers, once per attempt-batch, which structure_set is each faction's capital and which
-    // structure_sets are its non-capital ("supporting") structures - derived from config (see
-    // FactionStructureAssignments), matched against structure_sets in the registry that actually use
-    // "facthan:faction_spread". A structure_set's own weighted entries are respected as-is.
+    // structure_sets are its non-capital ("supporting") structures - derived purely from which
+    // structure_sets in the registry use "facthan:faction_spread" with a matching "faction" field,
+    // per FactionStructurePlacement. A structure_set's own weighted entries are respected as-is.
     private record FactionStructures(Map<ResourceLocation, List<Structure>> capitalStructures,
                                       Map<ResourceLocation, List<Structure>> supportingStructures) {
 
         static FactionStructures gather(RegistryAccess registryAccess) {
             Map<ResourceLocation, List<Structure>> capitals = new HashMap<>();
             Map<ResourceLocation, List<Structure>> supporting = new HashMap<>();
-            Map<ResourceLocation, FactionStructureAssignments.Assignment> assignments = FactionStructureAssignments.byStructureSetId();
 
             registryAccess.registryOrThrow(Registries.STRUCTURE_SET).entrySet().forEach(entry -> {
-                FactionStructureAssignments.Assignment assignment = assignments.get(entry.getKey().location());
-                if (assignment == null) return;
-
                 StructureSet set = entry.getValue();
-                if (!(set.placement() instanceof FactionStructurePlacement)) return;
+                StructurePlacement placement = set.placement();
+                if (!(placement instanceof FactionStructurePlacement fsp)) return;
 
-                Map<ResourceLocation, List<Structure>> target = assignment.isCapital() ? capitals : supporting;
-                List<Structure> list = target.computeIfAbsent(assignment.faction(), f -> new ArrayList<>());
+                Map<ResourceLocation, List<Structure>> target = fsp.isCapital() ? capitals : supporting;
+                List<Structure> list = target.computeIfAbsent(fsp.faction(), f -> new ArrayList<>());
                 set.structures().forEach(selection -> list.add(selection.structure().value()));
             });
 

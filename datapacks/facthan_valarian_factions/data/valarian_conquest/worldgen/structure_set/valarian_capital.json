@@ -9,6 +9,8 @@
     "type": "facthan:faction_spread",
     "salt": 1939227820,
     "spacing": 12,
-    "separation": 8
+    "separation": 8,
+    "faction": "valarian_conquest:valarian",
+    "is_capital": true
   }
 }

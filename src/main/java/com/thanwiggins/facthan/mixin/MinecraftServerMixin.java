@@ -2,7 +2,6 @@ package com.thanwiggins.facthan.mixin;
 
 import com.mojang.logging.LogUtils;
 import com.thanwiggins.facthan.CapitalRealmPlanner;
-import com.thanwiggins.facthan.FactionStructureAssignments;
 import com.thanwiggins.facthan.KingdomBootStatus;
 import com.thanwiggins.facthan.KingdomGenerationAbortedException;
 import net.minecraft.server.MinecraftServer;
@@ -36,12 +35,6 @@ public abstract class MinecraftServerMixin {
     @Inject(method = "prepareLevels", at = @At("HEAD"))
     private void facthan$planKingdom(ChunkProgressListener listener, CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
-
-        // Unconditional, unlike CapitalRealmPlanner itself - this rebuilds an in-memory lookup tied
-        // to THIS server start's own StructureSet/StructurePlacement instances (see
-        // FactionStructureAssignments), so it has to run every time, not just the one time kingdom
-        // generation itself ever finalizes for a given world.
-        FactionStructureAssignments.refresh(server.registryAccess());
 
         try {
             CapitalRealmPlanner.planAndForceGenerate(server);
