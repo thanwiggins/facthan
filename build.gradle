@@ -86,6 +86,16 @@ repositories {
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // MixinGradle's "mixin { add sourceSets.main, ... }" DSL configures the compiler args
+    // (-AoutRefMapFile etc.) but doesn't actually put the Mixin annotation processor jar on the
+    // annotationProcessor configuration in this ForgeGradle 6 / Gradle 8 combination - and Gradle
+    // auto-adds "-proc:none" (silently disabling ALL annotation processing) whenever that
+    // configuration is empty. Without this, facthan.refmap.json is never generated at all, which
+    // is silently harmless in a dev environment (mixin falls back to matching un-obfuscated names
+    // directly) but fatal in a real, obfuscated production environment - every @Accessor/@Inject
+    // target lookup fails outright.
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
 
 tasks.named('processResources', ProcessResources).configure {
