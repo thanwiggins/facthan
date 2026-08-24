@@ -1,0 +1,14 @@
+{
+  "structures": [
+    {
+      "structure": "valarian_conquest:barathian_outpost",
+      "weight": 3
+    }
+  ],
+  "placement": {
+    "type": "facthan:faction_spread",
+    "salt": 1939227820,
+    "spacing": 12,
+    "separation": 8
+  }
+}

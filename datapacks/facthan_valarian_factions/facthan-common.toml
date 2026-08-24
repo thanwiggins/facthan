@@ -1,0 +1,12 @@
+# Companion config for this datapack - copy the "structureAssignments" list below into
+# config/facthan-common.toml (merging it into that file's existing "Kingdom Generation Settings"
+# table if one is already present). Without this, the structure_set JSONs in this datapack use
+# "facthan:faction_spread" but are assigned to no faction, so Facthan's kingdom generation does
+# nothing with them - see FactionStructureAssignments and the main README's Configuration section.
+#
+# This file is not itself read by Facthan or by Minecraft - it's just this datapack's own copy of
+# the config it depends on, kept alongside it so the pairing travels together instead of only living
+# in a gitignored run/config/facthan-common.toml.
+
+["Kingdom Generation Settings"]
+	structureAssignments = ["valarian_conquest:barathian capital valarian_conquest:barathian_capital", "valarian_conquest:barathian supporting valarian_conquest:barathian_outpost", "valarian_conquest:burgundian capital valarian_conquest:burgundian_capital", "valarian_conquest:burgundian supporting valarian_conquest:burgundian_outpost", "valarian_conquest:hospitaller capital valarian_conquest:hospitaller_capital", "valarian_conquest:hospitaller supporting valarian_conquest:hospitaller_outpost", "valarian_conquest:orleanian capital valarian_conquest:orleanian_capital", "valarian_conquest:orleanian supporting valarian_conquest:orleanian_outpost", "valarian_conquest:templar capital valarian_conquest:templar_capital", "valarian_conquest:templar supporting valarian_conquest:templar_outpost", "valarian_conquest:valarian capital valarian_conquest:valarian_capital", "valarian_conquest:valarian supporting valarian_conquest:valarian_outpost", "valarian_conquest:visgothian capital valarian_conquest:visgothian_capital", "valarian_conquest:visgothian supporting valarian_conquest:visgothian_outpost", "valarian_conquest:bohemian supporting valarian_conquest:bohemian_outpost"]

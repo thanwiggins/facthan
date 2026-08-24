@@ -1,0 +1,16 @@
+{
+  "structures": [
+    { "structure": "valarian_conquest:neutral_outpost", "weight": 4 },
+    { "structure": "valarian_conquest:bandit_camp", "weight": 3 },
+    { "structure": "valarian_conquest:neutral_tent_camp", "weight": 3 },
+    { "structure": "valarian_conquest:neutral_tent_camp_2", "weight": 3 },
+    { "structure": "valarian_conquest:bandit_ruins", "weight": 3 },
+    { "structure": "valarian_conquest:bandit_ruins_2", "weight": 1 }
+  ],
+  "placement": {
+    "type": "minecraft:random_spread",
+    "spacing": 24,
+    "separation": 12,
+    "salt": 1939227820
+  }
+}

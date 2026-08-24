@@ -19,7 +19,6 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
-import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 import org.slf4j.Logger;
 
@@ -88,7 +87,7 @@ public final class CapitalRealmPlanner {
             return;
         }
 
-        List<ResourceLocation> registeredFactions = FactionRegistry.orderedFactionIds();
+        List<ResourceLocation> registeredFactions = FactionStructureAssignments.orderedFactionIds();
         if (registeredFactions.isEmpty()) {
             LOGGER.info("No political factions registered - skipping kingdom generation.");
             data.markFinalized();
@@ -129,18 +128,27 @@ public final class CapitalRealmPlanner {
         // other, not-yet-vetoed structure_sets via their ordinary spacing grid.
         KingdomSavedData.reserveFactions(capitals.keySet());
 
+        // Progress text below is deliberately faction-agnostic (a count, never a faction id) - this
+        // runs on the "Building world" screen before the player has spawned in, and naming which
+        // faction just got a capital here would spoil exactly what CapitalRealmPlanner exists to let
+        // the player discover by exploring.
+        int totalRealms = capitals.size();
         Map<ResourceLocation, List<Placement>> realms = new LinkedHashMap<>();
+        int realmIndex = 0;
         for (Map.Entry<ResourceLocation, Placement> entry : capitals.entrySet()) {
             ResourceLocation faction = entry.getKey();
-            KingdomBootStatus.set("Searching for " + faction + "'s realm structures...");
+            realmIndex++;
+            KingdomBootStatus.set("Searching for realm structures (" + realmIndex + "/" + totalRealms + ")...");
             RandomSource realmRandom = RandomSource.create(mixSeed(overworld.getSeed(), faction.toString().hashCode()));
-            realms.put(faction, validateRealm(server, overworld, structures, faction, entry.getValue().pos(), realmRandom));
+            realms.put(faction, validateRealm(server, overworld, structures, faction, entry.getValue().pos(), bounds, realmRandom));
         }
 
+        int generateIndex = 0;
         for (Map.Entry<ResourceLocation, Placement> entry : capitals.entrySet()) {
             ResourceLocation faction = entry.getKey();
             Placement capital = entry.getValue();
-            KingdomBootStatus.set("Generating " + faction + "'s capital and realm...");
+            generateIndex++;
+            KingdomBootStatus.set("Generating capital and realm (" + generateIndex + "/" + totalRealms + ")...");
 
             forceGenerate(overworld, capital.structure(), capital.pos());
             data.putCapital(faction, capital.pos());
@@ -152,6 +160,7 @@ public final class CapitalRealmPlanner {
         }
 
         data.markFinalized();
+        XaeroCacheFlush.flush(server);
         KingdomBootStatus.clear();
         LOGGER.info("Kingdom generation finalized: {} capital(s) placed.", capitals.size());
     }
@@ -208,7 +217,8 @@ public final class CapitalRealmPlanner {
     // Same idea as tryValidateCapitals, for one capital's realm - pure validation, no side effects.
     // A slot that never finds a spot within its retry budget is silently dropped (no world flush).
     private static List<Placement> validateRealm(MinecraftServer server, ServerLevel overworld,
-            FactionStructures structures, ResourceLocation faction, BlockPos capitalPos, RandomSource random) {
+            FactionStructures structures, ResourceLocation faction, BlockPos capitalPos,
+            WorldBorderCompat.Bounds bounds, RandomSource random) {
         List<Structure> pool = structures.supportingStructures().get(faction);
         if (pool == null || pool.isEmpty()) return List.of();
 
@@ -232,6 +242,7 @@ public final class CapitalRealmPlanner {
                 int x = capitalPos.getX() + (int) Math.round(Math.cos(angle) * range);
                 int z = capitalPos.getZ() + (int) Math.round(Math.sin(angle) * range);
 
+                if (!bounds.contains(x, z)) continue;
                 if (tooCloseToAny(positionsOf(placedThisRealm), x, z, minSeparation)) continue;
 
                 BlockPos target = new BlockPos(x, 0, z);
@@ -375,23 +386,26 @@ public final class CapitalRealmPlanner {
     }
 
     // Gathers, once per attempt-batch, which structure_set is each faction's capital and which
-    // structure_sets are its non-capital ("supporting") structures - derived purely from which
-    // structure_sets in the registry use "facthan:faction_spread" with a matching "faction" field,
-    // per FactionStructurePlacement. A structure_set's own weighted entries are respected as-is.
+    // structure_sets are its non-capital ("supporting") structures - derived from config (see
+    // FactionStructureAssignments), matched against structure_sets in the registry that actually use
+    // "facthan:faction_spread". A structure_set's own weighted entries are respected as-is.
     private record FactionStructures(Map<ResourceLocation, List<Structure>> capitalStructures,
                                       Map<ResourceLocation, List<Structure>> supportingStructures) {
 
         static FactionStructures gather(RegistryAccess registryAccess) {
             Map<ResourceLocation, List<Structure>> capitals = new HashMap<>();
             Map<ResourceLocation, List<Structure>> supporting = new HashMap<>();
+            Map<ResourceLocation, FactionStructureAssignments.Assignment> assignments = FactionStructureAssignments.byStructureSetId();
 
             registryAccess.registryOrThrow(Registries.STRUCTURE_SET).entrySet().forEach(entry -> {
-                StructureSet set = entry.getValue();
-                StructurePlacement placement = set.placement();
-                if (!(placement instanceof FactionStructurePlacement fsp)) return;
+                FactionStructureAssignments.Assignment assignment = assignments.get(entry.getKey().location());
+                if (assignment == null) return;
 
-                Map<ResourceLocation, List<Structure>> target = fsp.isCapital() ? capitals : supporting;
-                List<Structure> list = target.computeIfAbsent(fsp.faction(), f -> new ArrayList<>());
+                StructureSet set = entry.getValue();
+                if (!(set.placement() instanceof FactionStructurePlacement)) return;
+
+                Map<ResourceLocation, List<Structure>> target = assignment.isCapital() ? capitals : supporting;
+                List<Structure> list = target.computeIfAbsent(assignment.faction(), f -> new ArrayList<>());
                 set.structures().forEach(selection -> list.add(selection.structure().value()));
             });
 
