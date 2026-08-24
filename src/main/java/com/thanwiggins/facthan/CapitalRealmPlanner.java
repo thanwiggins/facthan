@@ -314,15 +314,39 @@ public final class CapitalRealmPlanner {
         ChunkPos minChunk = new ChunkPos(SectionPos.blockToSectionCoord(box.minX()), SectionPos.blockToSectionCoord(box.minZ()));
         ChunkPos maxChunk = new ChunkPos(SectionPos.blockToSectionCoord(box.maxX()), SectionPos.blockToSectionCoord(box.maxZ()));
 
+        List<ChunkPos> touchedChunks = new ArrayList<>();
+        ChunkPos.rangeClosed(minChunk, maxChunk).forEach(touchedChunks::add);
+
+        // Pass 1: force every touched chunk all the way to FULL generation status BEFORE registering
+        // or placing anything. Forcing an ungenerated chunk to load runs it through EVERY generation
+        // stage, including "structure references" (which scans nearby chunks for an ALREADY
+        // REGISTERED structure start) and "features" (which, if a reference was found, calls
+        // placeInChunk on its own). If we registered our start while other touched chunks hadn't
+        // finished generating yet, each of THEIR OWN normal generation passes would discover our
+        // just-registered start and place this structure into themselves automatically - on top of
+        // the explicit placement in pass 2 below - two placements at the same coordinates, which is
+        // exactly why entities were being duplicated (blocks silently no-op on a second identical
+        // write; entities don't). Real vanilla "/place structure" never hits this because it requires
+        // every touched chunk to already be fully loaded first (it refuses to run otherwise) - by
+        // then each chunk's own generation has long since finished with nothing registered to react
+        // to. We can't require that (we're running before any chunk exists at all), so we reproduce
+        // the same precondition ourselves: fully generate first, register/place second.
+        Map<ChunkPos, ChunkAccess> chunksByPos = new LinkedHashMap<>();
+        for (ChunkPos chunkPos : touchedChunks) {
+            chunksByPos.put(chunkPos, overworld.getChunk(chunkPos.x, chunkPos.z));
+        }
+
+        // Pass 2: every touched chunk is now FULL with nothing registered for any of them - safe to
+        // register and place without anything else reacting to it mid-loop.
         StructureManager structureManager = overworld.structureManager();
-        ChunkPos.rangeClosed(minChunk, maxChunk).forEach(chunkPos -> {
-            ChunkAccess chunk = overworld.getChunk(chunkPos.x, chunkPos.z);
+        for (ChunkPos chunkPos : touchedChunks) {
+            ChunkAccess chunk = chunksByPos.get(chunkPos);
             structureManager.setStartForStructure(SectionPos.of(chunkPos, 0), structure, start, chunk);
             start.placeInChunk(overworld, structureManager, generator, overworld.getRandom(),
                     new BoundingBox(chunkPos.getMinBlockX(), overworld.getMinBuildHeight(), chunkPos.getMinBlockZ(),
                             chunkPos.getMaxBlockX(), overworld.getMaxBuildHeight(), chunkPos.getMaxBlockZ()),
                     chunkPos);
-        });
+        }
     }
 
     private static double distance(int x1, int z1, int x2, int z2) {
