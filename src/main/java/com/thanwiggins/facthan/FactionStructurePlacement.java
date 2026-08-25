@@ -13,7 +13,7 @@ import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement
 
 import java.util.Optional;
 
-// The "mcaichat:faction_spread" structure_set placement type - a datapack author swaps this in for
+// The "facthan:faction_spread" structure_set placement type - a datapack author swaps this in for
 // "minecraft:random_spread" on any structure_set they want kingdom-bound, adding two fields
 // ("faction", "is_capital") on top of random_spread's usual spacing/separation/salt/etc.
 //

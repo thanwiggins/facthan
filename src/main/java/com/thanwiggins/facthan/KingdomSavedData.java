@@ -75,6 +75,9 @@ public class KingdomSavedData extends SavedData {
         setDirty();
     }
 
+    // Covers a faction's supporting structures regardless of which routine placed them - a
+    // capital-faction's realm (CapitalRealmPlanner#validateRealm) or an orphan faction's one-time
+    // structures (CapitalRealmPlanner#validateOrphans) are recorded identically here.
     public List<BlockPos> supportingStructures(ResourceLocation faction) {
         return supportingStructures.computeIfAbsent(faction, f -> new ArrayList<>());
     }

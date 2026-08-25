@@ -20,17 +20,19 @@ import java.util.Map;
 
 // Datapack-driven registry of political factions - loads every data/<namespace>/political_factions/
 // *.json across all active datapacks (vanilla's own reload-listener merge behavior, so any number of
-// datapacks can each add factions). A faction registered here is only eligible to be assigned
-// Voronoi territory (PoliticalMapService) - which structure_sets belong to it is declared separately,
-// on the structure_set's own "mcaichat:faction_spread" placement (see FactionStructurePlacement).
+// datapacks can each add factions). A faction registered here is only eligible for the capital
+// search and orphan structure generation (CapitalRealmPlanner) - which structure_sets belong to it
+// is declared separately, on the structure_set's own "facthan:faction_spread" placement (see
+// FactionStructurePlacement).
 @Mod.EventBusSubscriber(modid = FacthanMod.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class FactionRegistry extends SimpleJsonResourceReloadListener {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final FactionRegistry INSTANCE = new FactionRegistry();
 
     private volatile Map<ResourceLocation, Faction> factionsById = Map.of();
-    // Sorted independently of datapack load order, so cell->faction assignment (PoliticalMapService)
-    // is stable across restarts and hosts even if datapacks are re-ordered or added.
+    // Sorted independently of datapack load order, so the capital search's own shuffle
+    // (CapitalRealmPlanner) is stable across restarts and hosts even if datapacks are re-ordered or
+    // added - the RNG stream only ever depends on this list's contents, never on load order.
     private volatile List<ResourceLocation> orderedFactionIds = List.of();
 
     private FactionRegistry() {

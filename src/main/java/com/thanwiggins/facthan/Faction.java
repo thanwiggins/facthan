@@ -7,9 +7,10 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 // file's own resource location IS the faction's id (see FactionRegistry), so any number of
 // datapacks can each contribute factions without needing a central registry list.
 //
-// Registering a faction here only makes it eligible to be assigned Voronoi cells (territory) - a
-// structure_set actually belongs to one by using the "mcaichat:faction_spread" placement type
-// (FactionStructurePlacement) with a matching "faction" field, not by anything in this file.
+// Registering a faction here only makes it eligible for the capital search and orphan structure
+// generation (CapitalRealmPlanner) - a structure_set actually belongs to one by using the
+// "facthan:faction_spread" placement type (FactionStructurePlacement) with a matching "faction"
+// field, not by anything in this file.
 public record Faction(String displayName, String colorHex) {
     public static final Codec<Faction> CODEC = RecordCodecBuilder.create(instance -> instance.group(
             Codec.STRING.fieldOf("display_name").forGetter(Faction::displayName),

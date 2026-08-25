@@ -1,0 +1,15 @@
+{
+  "structures": [
+    {
+      "structure": "valarian_conquest:neutral_outpost",
+      "weight": 4
+    }
+  ],
+  "placement": {
+    "type": "facthan:faction_spread",
+    "salt": 1939227820,
+    "spacing": 24,
+    "separation": 12,
+    "faction": "valarian_conquest:neutral"
+  }
+}

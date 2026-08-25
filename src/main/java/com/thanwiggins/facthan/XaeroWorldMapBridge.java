@@ -82,6 +82,24 @@ public final class XaeroWorldMapBridge {
                 return true; // already switched - nothing left to do
             }
 
+            // isUsingWorldSave() being true here is ambiguous - it could mean nothing has ever been
+            // confirmed for this dimension, OR it could mean something WAS already confirmed (this
+            // session, or a prior one - "confirmedMultiworld" is persisted to dimension_config.txt
+            // and correctly restored on load, see MapDimension#resetCustomMultiworldUnsynced) but
+            // Xaero's own background MapProcessor thread hasn't promoted it into the field
+            // isUsingWorldSave() actually reads (currentMultiworld) yet - that promotion only
+            // happens inside MapProcessor#updateWorld -> updateWorldSynced ->
+            // MapWorld#switchToFutureUnsynced, running continuously on Xaero's own processing loop,
+            // entirely independent of this method. The previous version of this check couldn't tell
+            // those two cases apart, so on every subsequent world load it created ANOTHER brand new
+            // custom map before that background promotion had a chance to catch up - that was the "a
+            // new World Map every load" bug. hasConfirmedMultiworld() (confirmedMultiworld != null)
+            // is the reliable signal: if something's already confirmed, just keep polling instead of
+            // creating a duplicate.
+            if ((boolean) mapDimensionClass.getMethod("hasConfirmedMultiworld").invoke(dimension)) {
+                return false;
+            }
+
             boolean uiPaused = (boolean) mapProcessorClass.getMethod("isUIPaused").invoke(mapProcessor);
             boolean waitingForWorldUpdate = (boolean) mapProcessorClass.getMethod("isWaitingForWorldUpdate").invoke(mapProcessor);
             if (uiPaused || waitingForWorldUpdate) return false;
