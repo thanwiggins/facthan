@@ -12,13 +12,16 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.StructureManager;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.StructurePiece;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
+import net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece;
 import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
 import org.slf4j.Logger;
@@ -74,6 +77,12 @@ public final class CapitalRealmPlanner {
     private static final long CAPITAL_COUNT_SALT = 0x1DE5170CL;
 
     private record Placement(BlockPos pos, Structure structure) {}
+
+    // What forceGenerate actually produced - the real bounding box (heightmap-projected, not the
+    // Y=0 search target) and the real rotation the jigsaw system rolled for it, needed to compute
+    // this placement's FrontAnchor. Null (see forceGenerate) if generation somehow failed after
+    // already validating - see the error logged there.
+    private record GeneratedPlacement(BoundingBox boundingBox, Rotation rotation) {}
 
     private CapitalRealmPlanner() {}
 
@@ -180,17 +189,42 @@ public final class CapitalRealmPlanner {
                     positionsOf(capitals.values()), allSupporting));
         }
 
+        int roadAnchorOffset = KingdomConfig.ROAD_ANCHOR_OFFSET.get();
+
         for (Map.Entry<ResourceLocation, Placement> entry : capitals.entrySet()) {
             ResourceLocation faction = entry.getKey();
             Placement capital = entry.getValue();
             KingdomBootStatus.set("Generating capital and realm...");
 
-            forceGenerate(overworld, capital.structure(), capital.pos());
+            GeneratedPlacement capitalGenerated = forceGenerate(overworld, capital.structure(), capital.pos());
             data.putCapital(faction, capital.pos());
 
+            // Collected purely for this realm's own road-building below - never persisted, since
+            // roads are built (or given up on) synchronously in this same pass, before
+            // markFinalized(), so there is nothing left to redo on a later boot.
+            List<BoundingBox> realmBoxes = new ArrayList<>();
+            List<FrontAnchor> supportingAnchors = new ArrayList<>();
+            FrontAnchor capitalAnchor = null;
+            if (capitalGenerated != null) {
+                realmBoxes.add(capitalGenerated.boundingBox());
+                capitalAnchor = FrontAnchor.compute(structureId(overworld, capital.structure()),
+                        capitalGenerated.boundingBox(), capitalGenerated.rotation(), roadAnchorOffset);
+            }
+
             for (Placement supporting : realms.getOrDefault(faction, List.of())) {
-                forceGenerate(overworld, supporting.structure(), supporting.pos());
+                GeneratedPlacement generated = forceGenerate(overworld, supporting.structure(), supporting.pos());
                 data.addSupportingStructure(faction, supporting.pos());
+                if (generated == null) continue;
+
+                realmBoxes.add(generated.boundingBox());
+                FrontAnchor anchor = FrontAnchor.compute(structureId(overworld, supporting.structure()),
+                        generated.boundingBox(), generated.rotation(), roadAnchorOffset);
+                if (anchor != null) supportingAnchors.add(anchor);
+            }
+
+            if (KingdomConfig.ENABLE_ROADS.get() && capitalAnchor != null && !supportingAnchors.isEmpty()) {
+                KingdomBootStatus.set("Building roads...");
+                RoadBuilder.connectRealm(overworld, faction, capitalAnchor, supportingAnchors, realmBoxes);
             }
         }
 
@@ -395,7 +429,7 @@ public final class CapitalRealmPlanner {
     // matching /place structure's decompiled behavior. A single placeInChunk call for only the origin
     // chunk (what this used to do) is why a structure bigger than one chunk - any castle - only ever
     // got a fragment of itself written.
-    private static void forceGenerate(ServerLevel overworld, Structure structure, BlockPos target) {
+    private static GeneratedPlacement forceGenerate(ServerLevel overworld, Structure structure, BlockPos target) {
         ServerChunkCache chunkSource = overworld.getChunkSource();
         ChunkGenerator generator = chunkSource.getGenerator();
         RandomState randomState = chunkSource.randomState();
@@ -412,7 +446,7 @@ public final class CapitalRealmPlanner {
         if (!start.isValid()) {
             LOGGER.error("A location for {} validated during the search but failed to regenerate identically " +
                     "at force-generation time at {} - this should not be possible; please report this.", structure, target);
-            return;
+            return null;
         }
 
         BoundingBox box = start.getBoundingBox();
@@ -452,6 +486,26 @@ public final class CapitalRealmPlanner {
                             chunkPos.getMaxBlockX(), overworld.getMaxBuildHeight(), chunkPos.getMaxBlockZ()),
                     chunkPos);
         }
+
+        return new GeneratedPlacement(box, extractRotation(start));
+    }
+
+    // The real-world rotation this structure ended up with - only meaningful for the common case
+    // (a jigsaw structure's starting piece is a PoolElementStructurePiece, which is what every
+    // Valarian Conquest structure_set is). A structure whose Structure implementation doesn't
+    // produce one of these (some other mod's custom Structure subclass) has no discoverable
+    // rotation, so it's treated as unrotated - FrontAnchor.compute still works, it just can't be
+    // more accurate than that for such a structure.
+    private static Rotation extractRotation(StructureStart start) {
+        List<StructurePiece> pieces = start.getPieces();
+        if (!pieces.isEmpty() && pieces.get(0) instanceof PoolElementStructurePiece poolPiece) {
+            return poolPiece.getRotation();
+        }
+        return Rotation.NONE;
+    }
+
+    private static ResourceLocation structureId(ServerLevel overworld, Structure structure) {
+        return overworld.registryAccess().registryOrThrow(Registries.STRUCTURE).getKey(structure);
     }
 
     private static double distance(int x1, int z1, int x2, int z2) {

@@ -1,0 +1,4 @@
+{
+  "outer": ["minecraft:red_sandstone"],
+  "bridge": ["minecraft:red_sandstone", "minecraft:oak_planks"]
+}

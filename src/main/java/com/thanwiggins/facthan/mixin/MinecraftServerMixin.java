@@ -1,18 +1,14 @@
 package com.thanwiggins.facthan.mixin;
 
-import com.mojang.logging.LogUtils;
 import com.thanwiggins.facthan.CapitalRealmPlanner;
 import com.thanwiggins.facthan.KingdomBootStatus;
 import com.thanwiggins.facthan.KingdomGenerationAbortedException;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.progress.ChunkProgressListener;
-import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.io.IOException;
 
 // Runs the capital/realm search exactly once, right after MinecraftServer#createLevels finishes
 // (so the Overworld's ChunkGenerator/StructureManager/RegistryAccess all exist) but before
@@ -28,10 +24,13 @@ import java.io.IOException;
 // injection) on a separate thread, while Minecraft#doWorldLoad's own loop just keeps ticking that
 // screen until the server reports isReady() - see KingdomBootStatus for how that loop's client-side
 // overlay reads our progress.
+//
+// Deliberately does NOT delete the incomplete save here - this runs on the server's OWN thread,
+// still inside its normal startup/shutdown sequence, so deleting the level out from under it races
+// vanilla's own subsequent "save the world" step on the way down (see MinecraftCrashRedirectMixin,
+// which defers that cleanup until the old server's thread has actually finished dying).
 @Mixin(MinecraftServer.class)
 public abstract class MinecraftServerMixin {
-    private static final Logger LOGGER = LogUtils.getLogger();
-
     @Inject(method = "prepareLevels", at = @At("HEAD"))
     private void facthan$planKingdom(ChunkProgressListener listener, CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
@@ -40,20 +39,7 @@ public abstract class MinecraftServerMixin {
             CapitalRealmPlanner.planAndForceGenerate(server);
         } catch (KingdomGenerationAbortedException e) {
             KingdomBootStatus.clear();
-            deleteIncompleteSave(server);
             throw e;
-        }
-    }
-
-    // Best-effort - an incomplete save folder lingering on disk after a failed capital search is
-    // an inconvenience for the player to clean up manually, not a correctness problem, so a failed
-    // deletion here is only logged, never allowed to mask the real KingdomGenerationAbortedException.
-    private void deleteIncompleteSave(MinecraftServer server) {
-        try {
-            ((MinecraftServerAccessor) server).facthan$getStorageSource().deleteLevel();
-        } catch (IOException | RuntimeException e) {
-            LOGGER.warn("Couldn't clean up the incomplete world save after a failed capital search - " +
-                    "you may need to delete it by hand.", e);
         }
     }
 }

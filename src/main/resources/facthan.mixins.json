@@ -9,6 +9,7 @@
     "MinecraftServerAccessor"
   ],
   "client": [
+    "HideChunkGridMixin",
     "MinecraftAccessor",
     "MinecraftCrashRedirectMixin",
     "WorldOpenFlowsRetryMixin"

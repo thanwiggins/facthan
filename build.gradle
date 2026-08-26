@@ -16,7 +16,7 @@ plugins {
 
 apply plugin: 'org.spongepowered.mixin'
 
-version = '1.2.0'
+version = mod_version
 group = 'com.thanwiggins.facthan'
 
 base {

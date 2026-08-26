@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "pack_format": 15,
+    "description": "Facthan gentle terrain - dampens overworld height variance so large structures sit more naturally, independent of any faction/road datapack"
+  }
+}
