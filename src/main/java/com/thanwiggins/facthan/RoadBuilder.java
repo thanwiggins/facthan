@@ -514,7 +514,9 @@ final class RoadBuilder {
         return (int) key;
     }
 
-    private static BlockState resolveBlock(String registryName, Block fallback) {
+    // Package-visible so PathLightBuilder can resolve the same road blocks (to recognize when a
+    // light's own spot has already been paved by some other road, e.g. at an intersection).
+    static BlockState resolveBlock(String registryName, Block fallback) {
         Block block = ForgeRegistries.BLOCKS.getValue(new ResourceLocation(registryName));
         if (block == null) {
             LOGGER.error("Unknown road block \"{}\" - falling back to {}.", registryName, fallback);

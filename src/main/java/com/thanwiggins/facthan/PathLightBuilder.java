@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -36,21 +37,11 @@ final class PathLightBuilder {
     private static final int BLUEPRINT_CENTER_X = 1;
     private static final int BLUEPRINT_CENTER_Z = 1;
 
-    // The blueprint is a plus-shape at every layer that isn't just the center pole (see
-    // path_lights/lamp.json) - 1 block from its own center in every direction, never more.
-    private static final int ARM_RADIUS = 1;
-    private static final int STRUCTURE_HEIGHT = 6;
-
     // Empty columns left between a road's outer-edge lane and the light's nearest occupied block
     // (its arm) - "one block away from the outer edge", per the original request.
     private static final int GAP = 1;
 
-    // Distance from a road's outer-edge lane to a light's own center pole: GAP empty columns, then
-    // one more column to reach the light's nearest block (its arm), then ARM_RADIUS more to reach
-    // the center the arm itself is offset from.
-    private static final int CENTER_OFFSET = GAP + 1 + ARM_RADIUS;
-
-    // A shoulder position is skipped (see placePair) if its natural terrain height differs from the
+    // A shoulder position is skipped (see placeSide) if its natural terrain height differs from the
     // road's own surface height here by more than this - catches cliffs/steep drop-offs beside an
     // otherwise normal (non-bridge) stretch of road.
     private static final int MAX_HEIGHT_DELTA = 3;
@@ -58,6 +49,26 @@ final class PathLightBuilder {
     private record BlueprintBlock(int dx, int dy, int dz, BlockState state) {}
 
     private static final List<BlueprintBlock> BLUEPRINT = loadBlueprint();
+
+    // Derived straight from the loaded blueprint rather than hardcoded, so redesigning
+    // path_lights/lamp.json (as already happened once) can never silently desync from these.
+    private static final int ARM_RADIUS = BLUEPRINT.stream()
+            .mapToInt(b -> Math.max(Math.abs(b.dx()), Math.abs(b.dz())))
+            .max().orElse(0);
+    private static final int STRUCTURE_HEIGHT = BLUEPRINT.stream().mapToInt(BlueprintBlock::dy).max().orElse(0);
+
+    // Distance from a road's outer-edge lane to a light's own center pole: GAP empty columns, then
+    // one more column to reach the light's nearest block (its arm), then ARM_RADIUS more to reach
+    // the center the arm itself is offset from.
+    private static final int CENTER_OFFSET = GAP + 1 + ARM_RADIUS;
+
+    // The road's own paved surface blocks - a light whose target spot already carries one of these
+    // has landed on some road's own pavement (typically a different road crossing this one, e.g. at
+    // a T-junction) rather than on natural shoulder ground, and must be skipped entirely.
+    private static final Set<Block> ROAD_BLOCKS = new HashSet<>(List.of(
+            RoadBuilder.resolveBlock(KingdomConfig.ROAD_INNER_BLOCK.get(), Blocks.DIRT_PATH).getBlock(),
+            RoadBuilder.resolveBlock(KingdomConfig.ROAD_OUTER_BLOCK.get(), Blocks.COBBLESTONE).getBlock(),
+            RoadBuilder.resolveBlock(KingdomConfig.ROAD_BRIDGE_BLOCK.get(), Blocks.OAK_PLANKS).getBlock()));
 
     private PathLightBuilder() {}
 
@@ -99,6 +110,11 @@ final class PathLightBuilder {
 
         int shoulderY = groundY(overworld, x, z, forcedChunks);
         if (Math.abs(shoulderY - roadY) > MAX_HEIGHT_DELTA) return;
+
+        // A road (typically a different one, crossing this one at an intersection) has already
+        // paved right where this light wants to stand - skip it rather than plant a lamp post in
+        // the middle of a walkable path.
+        if (ROAD_BLOCKS.contains(overworld.getBlockState(new BlockPos(x, shoulderY, z)).getBlock())) return;
 
         placeLight(overworld, x, shoulderY, z, forcedChunks);
     }
