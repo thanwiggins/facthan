@@ -6,7 +6,8 @@
   "refmap": "facthan.refmap.json",
   "mixins": [
     "MinecraftServerMixin",
-    "MinecraftServerAccessor"
+    "MinecraftServerAccessor",
+    "StructureStartPlacementGuardMixin"
   ],
   "client": [
     "HideChunkGridMixin",

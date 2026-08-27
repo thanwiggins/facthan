@@ -15,6 +15,7 @@ import net.minecraft.world.level.StructureManager;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkStatus;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
@@ -456,35 +457,49 @@ public final class CapitalRealmPlanner {
         List<ChunkPos> touchedChunks = new ArrayList<>();
         ChunkPos.rangeClosed(minChunk, maxChunk).forEach(touchedChunks::add);
 
-        // Pass 1: force every touched chunk all the way to FULL generation status BEFORE registering
-        // or placing anything. Forcing an ungenerated chunk to load runs it through EVERY generation
-        // stage, including "structure references" (which scans nearby chunks for an ALREADY
-        // REGISTERED structure start) and "features" (which, if a reference was found, calls
-        // placeInChunk on its own). If we registered our start while other touched chunks hadn't
-        // finished generating yet, each of THEIR OWN normal generation passes would discover our
-        // just-registered start and place this structure into themselves automatically - on top of
-        // the explicit placement in pass 2 below - two placements at the same coordinates, which is
-        // exactly why entities were being duplicated (blocks silently no-op on a second identical
-        // write; entities don't). Real vanilla "/place structure" never hits this because it requires
-        // every touched chunk to already be fully loaded first (it refuses to run otherwise) - by
-        // then each chunk's own generation has long since finished with nothing registered to react
-        // to. We can't require that (we're running before any chunk exists at all), so we reproduce
-        // the same precondition ourselves: fully generate first, register/place second.
-        Map<ChunkPos, ChunkAccess> chunksByPos = new LinkedHashMap<>();
-        for (ChunkPos chunkPos : touchedChunks) {
-            chunksByPos.put(chunkPos, overworld.getChunk(chunkPos.x, chunkPos.z));
-        }
-
-        // Pass 2: every touched chunk is now FULL with nothing registered for any of them - safe to
-        // register and place without anything else reacting to it mid-loop.
         StructureManager structureManager = overworld.structureManager();
-        for (ChunkPos chunkPos : touchedChunks) {
-            ChunkAccess chunk = chunksByPos.get(chunkPos);
-            structureManager.setStartForStructure(SectionPos.of(chunkPos, 0), structure, start, chunk);
-            start.placeInChunk(overworld, structureManager, generator, overworld.getRandom(),
-                    new BoundingBox(chunkPos.getMinBlockX(), overworld.getMinBuildHeight(), chunkPos.getMinBlockZ(),
-                            chunkPos.getMaxBlockX(), overworld.getMaxBuildHeight(), chunkPos.getMaxBlockZ()),
-                    chunkPos);
+
+        // Pass 0: register the start onto every touched chunk while each is still at EMPTY (cheap -
+        // no generation work happens at that status), before ANY of them advance further - the same
+        // "all chunks see the same picture" principle pass 1 below already relies on, just moved
+        // earlier. This is what lets terrain_adaptation/beard_box - which reads a chunk's structure
+        // data during its own NOISE stage - actually see this structure while shaping terrain around
+        // it, instead of finding nothing (see ForcedPlacementGuard's own comment for the full story).
+        // Marked "pending" so StructureStartPlacementGuardMixin cancels the unconditional
+        // auto-placement call vanilla's own FEATURES stage will otherwise make on this exact start
+        // during pass 1 - without that guard, this would reintroduce the entity-duplication bug this
+        // exact registration-ordering already caused once before (see this method's own history).
+        ForcedPlacementGuard.markPending(start);
+        try {
+            for (ChunkPos chunkPos : touchedChunks) {
+                ChunkAccess emptyChunk = chunkSource.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.EMPTY, true);
+                structureManager.setStartForStructure(SectionPos.of(chunkPos, 0), structure, start, emptyChunk);
+            }
+
+            // Pass 1: force every touched chunk the rest of the way to FULL generation status. Each
+            // one's own "structure references" stage now finds the start registered above and its
+            // "features" stage will try to auto-place it - cancelled by the guard, since it's still
+            // marked pending here.
+            Map<ChunkPos, ChunkAccess> chunksByPos = new LinkedHashMap<>();
+            for (ChunkPos chunkPos : touchedChunks) {
+                chunksByPos.put(chunkPos, overworld.getChunk(chunkPos.x, chunkPos.z));
+            }
+
+            // Pass 2: every touched chunk is FULL and already has the start registered (pass 0) -
+            // lift the guard and place it ourselves, for real, exactly once per chunk.
+            ForcedPlacementGuard.allow(start);
+            for (ChunkPos chunkPos : touchedChunks) {
+                ChunkAccess chunk = chunksByPos.get(chunkPos);
+                start.placeInChunk(overworld, structureManager, generator, overworld.getRandom(),
+                        new BoundingBox(chunkPos.getMinBlockX(), overworld.getMinBuildHeight(), chunkPos.getMinBlockZ(),
+                                chunkPos.getMaxBlockX(), overworld.getMaxBuildHeight(), chunkPos.getMaxBlockZ()),
+                        chunkPos);
+            }
+        } finally {
+            // Guarantees the guard never leaves a stray entry behind even if something above throws -
+            // this start is single-use (a fresh instance per forceGenerate call), so once we're done
+            // with it here, nothing should ever match it again either way.
+            ForcedPlacementGuard.allow(start);
         }
 
         return new GeneratedPlacement(box, extractRotation(start));
