@@ -22,8 +22,8 @@
     { "x": 2, "y": 3, "z": 1, "block": "minecraft:oak_fence", "properties": { "type": "bottom" } },
 
     { "x": 1, "y": 4, "z": 1, "block": "minecraft:oak_log" },
-    { "x": 0, "y": 4, "z": 1, "block": "minecraft:oak_slab", "properties": { "type": "bottom" } },
-    { "x": 2, "y": 4, "z": 1, "block": "minecraft:oak_slab", "properties": { "type": "bottom" } },
+    { "x": 0, "y": 4, "z": 1, "block": "minecraft:oak_slab" },
+    { "x": 2, "y": 4, "z": 1, "block": "minecraft:oak_slab" },
 
     { "x": 1, "y": 5, "z": 1, "block": "minecraft:campfire", "properties": { "lit": "true" } },
     { "x": 1, "y": 5, "z": 0, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "south", "half": "top" } },
