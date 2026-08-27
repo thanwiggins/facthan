@@ -113,19 +113,15 @@ public class KingdomConfig {
         ROAD_WIDTH = BUILDER.comment("Width, in blocks, of a generated road's paved surface.")
                 .defineInRange("roadWidth", 4, 1, 16);
 
-        ROAD_INNER_BLOCK = BUILDER.comment("Registry name of the block used to pave the inner (non-border) part of a road's surface, " +
-                        "for any biome with no \"inner\" override in the \"road_materials\" datapack type - in practice this is a " +
-                        "single global default for every biome, since none of the bundled palettes override it.")
+        ROAD_INNER_BLOCK = BUILDER.comment("Registry name of the block used to pave the inner (non-border) part of a road's surface.")
                 .define("roadInnerBlock", "minecraft:dirt_path");
 
-        ROAD_OUTER_BLOCK = BUILDER.comment("Registry name of the block used to pave the one-block border on each edge of a road's " +
-                        "surface, for any biome with no \"outer\" override in the \"road_materials\" datapack type - in practice this " +
-                        "is a single global default for every biome, since none of the bundled palettes override it.")
+        ROAD_OUTER_BLOCK = BUILDER.comment("Registry name of the block used to pave the one-block border on each edge of a road's surface.")
                 .define("roadOuterBlock", "minecraft:stone_bricks");
 
         ROAD_BRIDGE_BLOCK = BUILDER.comment("Registry name of the block used to support a road where it crosses a gap (water, a " +
-                        "ravine, etc.) for any biome with no \"road_materials\" bridge override. The road's own surface is always " +
-                        "solid and continuous either way - this is only the support underneath it, see roadBridgePierInterval.")
+                        "ravine, etc.). The road's own surface is always solid and continuous either way - this is only the support " +
+                        "underneath it, see roadBridgePierInterval.")
                 .define("roadBridgeBlock", "minecraft:oak_planks");
 
         ROAD_BRIDGE_PIER_INTERVAL = BUILDER.comment("How often, in blocks along a bridge, a support pier drops from each of the " +

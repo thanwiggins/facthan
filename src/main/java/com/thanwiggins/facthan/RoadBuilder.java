@@ -6,7 +6,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -28,8 +27,7 @@ import java.util.Set;
 // The road-building step at the tail of realm generation (see CapitalRealmPlanner) - connects a
 // capital's FrontAnchor to each of its realm's supporting structures' FrontAnchors with a
 // terrain-following road, borrowing RoadWeaver's high-level ideas (coarse-grid A*, slope-clamped
-// height smoothing) without depending on it or copying its code - see RoadMaterialRegistry for the
-// biome material side of this.
+// height smoothing) without depending on it or copying its code.
 //
 // Pathfinding samples terrain height via ChunkGenerator#getBaseHeight, which - like the
 // "project_start_to_heightmap" a structure_set itself uses - never needs a chunk to actually exist,
@@ -48,8 +46,9 @@ final class RoadBuilder {
 
     // Everything RoadBuilder needs that's constant for one whole realm's worth of roads - built
     // once in connectRealm so buildRoad/paveColumn don't have to carry a long, growing parameter
-    // list every time a new road-styling knob gets added.
-    private record RoadContext(RoadMaterialRegistry.RoadPalette fallbackPalette, RandomSource random,
+    // list every time a new road-styling knob gets added. inner/outer/bridge are single global
+    // blocks, not per-biome - there's no longer any variation to look up mid-paving.
+    private record RoadContext(BlockState inner, BlockState outer, BlockState bridge,
                                 int width, int slopeRise, int slopeRun, int pierInterval, int pierMaxHeight) {}
 
     private RoadBuilder() {}
@@ -58,13 +57,11 @@ final class RoadBuilder {
                               List<FrontAnchor> supportingAnchors, List<BoundingBox> blockedBoxes) {
         if (capitalAnchor == null || supportingAnchors.isEmpty()) return;
 
-        BlockState fallbackInner = resolveBlock(KingdomConfig.ROAD_INNER_BLOCK.get(), Blocks.DIRT_PATH);
-        BlockState fallbackOuter = resolveBlock(KingdomConfig.ROAD_OUTER_BLOCK.get(), Blocks.COBBLESTONE);
-        BlockState fallbackBridge = resolveBlock(KingdomConfig.ROAD_BRIDGE_BLOCK.get(), Blocks.OAK_PLANKS);
-        RoadMaterialRegistry.RoadPalette fallbackPalette = new RoadMaterialRegistry.RoadPalette(
-                List.of(fallbackInner), List.of(fallbackOuter), List.of(fallbackBridge));
+        BlockState inner = resolveBlock(KingdomConfig.ROAD_INNER_BLOCK.get(), Blocks.DIRT_PATH);
+        BlockState outer = resolveBlock(KingdomConfig.ROAD_OUTER_BLOCK.get(), Blocks.COBBLESTONE);
+        BlockState bridge = resolveBlock(KingdomConfig.ROAD_BRIDGE_BLOCK.get(), Blocks.OAK_PLANKS);
 
-        RoadContext ctx = new RoadContext(fallbackPalette, overworld.getRandom(), KingdomConfig.ROAD_WIDTH.get(),
+        RoadContext ctx = new RoadContext(inner, outer, bridge, KingdomConfig.ROAD_WIDTH.get(),
                 KingdomConfig.ROAD_MAX_SLOPE_RISE.get(), KingdomConfig.ROAD_MAX_SLOPE_RUN.get(),
                 KingdomConfig.ROAD_BRIDGE_PIER_INTERVAL.get(), KingdomConfig.ROAD_BRIDGE_PIER_MAX_HEIGHT.get());
 
@@ -280,8 +277,6 @@ final class RoadBuilder {
         int terrainY = overworld.getHeight(Heightmap.Types.OCEAN_FLOOR, x, z) - 1;
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-        RoadMaterialRegistry.RoadPalette palette = paletteAt(overworld, x, roadY, z, ctx.fallbackPalette());
-
         if (roadY >= terrainY) {
             // Bridging a gap - the deck itself (placed unconditionally below, same as any other
             // column) is always solid and continuous, so the pathway is always fully walkable. The
@@ -290,9 +285,7 @@ final class RoadBuilder {
             // inner lanes at those same positions) is a bare floating deck, like a real beam
             // bridge's periodic edge piers rather than a solid wall filling the entire gap.
             if (allowPier) {
-                List<BlockState> bridgeMaterial = pick(palette.bridge(), ctx.fallbackPalette().bridge());
-                BlockState bridge = bridgeMaterial.get(ctx.random().nextInt(bridgeMaterial.size()));
-                placePier(overworld, x, roadY - 1, z, bridge, ctx.pierMaxHeight());
+                placePier(overworld, x, roadY - 1, z, ctx.bridge(), ctx.pierMaxHeight());
             }
         } else {
             for (int y = roadY + 1; y <= terrainY; y++) {
@@ -300,10 +293,7 @@ final class RoadBuilder {
             }
         }
 
-        List<BlockState> surfaceOptions = isOuterEdge
-                ? pick(palette.outer(), ctx.fallbackPalette().outer())
-                : pick(palette.inner(), ctx.fallbackPalette().inner());
-        overworld.setBlock(cursor.set(x, roadY, z), surfaceOptions.get(ctx.random().nextInt(surfaceOptions.size())), 2);
+        overworld.setBlock(cursor.set(x, roadY, z), isOuterEdge ? ctx.outer() : ctx.inner(), 2);
 
         // RoadWeaver firms up mud directly under a road, since a path visually sitting on top of
         // soft mud reads oddly - one extra check, same idea, our own block constants.
@@ -329,18 +319,6 @@ final class RoadBuilder {
             if (overworld.getBlockState(cursor).isFaceSturdy(overworld, cursor, Direction.UP)) break;
             overworld.setBlock(cursor, pierMaterial, 2);
         }
-    }
-
-    private static List<BlockState> pick(List<BlockState> preferred, List<BlockState> fallback) {
-        return !preferred.isEmpty() ? preferred : fallback;
-    }
-
-    private static RoadMaterialRegistry.RoadPalette paletteAt(ServerLevel overworld, int x, int y, int z,
-                                                                 RoadMaterialRegistry.RoadPalette fallback) {
-        ResourceLocation biomeId = overworld.getBiome(new BlockPos(x, y, z)).unwrapKey()
-                .map(key -> key.location()).orElse(null);
-        RoadMaterialRegistry.RoadPalette palette = biomeId != null ? RoadMaterialRegistry.paletteFor(biomeId) : null;
-        return palette != null ? palette : fallback;
     }
 
     private static List<double[]> resample(List<int[]> coarse) {

@@ -36,10 +36,10 @@ locations are decided once and persisted, so they survive server restarts.
   side of each structure was registered as its "front" (see Designating a structure's front below).
   A structure with no registered front simply gets no road; a road that can't find a route within
   its search budget is silently skipped rather than blocking world creation. A road has a clean,
-  two-tone cross-section (a plain inner surface with a distinct outer border - see Designating road
-  materials below) and a slope-limited grade; a road that crosses a gap (water, a ravine) always has
-  a solid, continuous surface to walk on, supported underneath by periodic piers reaching all the
-  way down to the real ground beneath, like a real beam bridge.
+  two-tone cross-section (a plain inner surface with a distinct outer border, both single global
+  block choices - see the config bullets below) and a slope-limited grade; a road that crosses a gap
+  (water, a ravine) always has a solid, continuous surface to walk on, supported underneath by
+  periodic piers reaching all the way down to the real ground beneath, like a real beam bridge.
 - **Optional Worldborder integration** - if
   [Than's Worldborder](https://github.com/thanwiggins/worldborder) is installed and its custom
   overworld border is enabled, the capital search stays inside it; otherwise it falls back to a
@@ -110,14 +110,12 @@ only that process's own copy of these settings can ever matter.
   painted, this will overwrite some of the structure's own blocks near its entrance.
 - `roadWidth` (default `4`) - width, in blocks, of a road's paved surface.
 - `roadInnerBlock` (default `minecraft:dirt_path`) - block used for a road's inner (non-border)
-  surface. In practice this is a single global choice, not biome-specific - none of the bundled
-  `road_materials` palettes override it.
+  surface.
 - `roadOuterBlock` (default `minecraft:stone_bricks`) - block used for the one-block border on each
-  edge of a road's surface. Also a single global choice today - none of the bundled palettes
-  override it either, though a datapack still can (see Designating road materials below).
-- `roadBridgeBlock` (default `minecraft:oak_planks`) - fallback block used for a bridge's support
-  piers, for any biome with no `bridge` override. The road's own surface is always solid and
-  continuous regardless - this is only the support underneath it.
+  edge of a road's surface.
+- `roadBridgeBlock` (default `minecraft:oak_planks`) - block used for a bridge's support piers. The
+  road's own surface is always solid and continuous regardless - this is only the support underneath
+  it.
 - `roadBridgePierInterval` (default `3`) - how often, in blocks along a bridge, a support pier
   drops from each of the road's two outer edges down to solid ground - every other column in the
   gap is left as a bare floating deck (the deck surface itself stays solid and continuous either
@@ -179,23 +177,6 @@ they generate, so Facthan combines this local direction with whichever rotation 
 to find the true real-world-facing side before building a road to it. A structure with no matching
 file here simply never gets a road; this is mod-agnostic like everything else in Facthan, so any
 datapack can register a front for any structure, not just the bundled Valarian Conquest ones.
-
-### Designating road materials
-Register a biome's road palette with a `data/<namespace>/road_materials/<path>.json` file, where
-`<namespace>:<path>` matches a biome id (e.g. `minecraft:plains`):
-```json
-{ "outer": ["minecraft:sandstone"], "bridge": ["minecraft:sandstone"] }
-```
-All three fields (`inner`, `outer`, `bridge`) are optional and independent - any field a biome
-doesn't override falls back to the matching global config value
-(`roadInnerBlock`/`roadOuterBlock`/`roadBridgeBlock`). Each is a list purely for forward
-compatibility (a list of one entry, today's bundled data, produces no visible randomness); the
-`outer` border is exactly the one-block edge on each side of the road, everything else is `inner`.
-
-Facthan bundles a `facthan_default_road_materials` datapack with a `bridge` override for many
-overworld biomes (derived from RoadWeaver's own per-biome wood-type hints) - `outer` isn't
-overridden by any bundled palette today, so every biome uses the global `roadOuterBlock` default.
-Replace or extend it with your own datapack the same way you would any other Facthan datapack type.
 
 ## Mod Interactions
 
