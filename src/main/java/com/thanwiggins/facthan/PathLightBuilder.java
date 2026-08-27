@@ -81,15 +81,12 @@ final class PathLightBuilder {
 
     // Places (up to) two lights straddling the road at centerline point "at" - one on each outer
     // edge - skipping either side individually if its shoulder isn't safe ground to stand a light
-    // on (see MAX_HEIGHT_DELTA), or both entirely if the road itself is bridging a gap here.
+    // on (see MAX_HEIGHT_DELTA in placeSide). A road bridging a real gap is covered by that same
+    // check: the shoulder position is never touched by paving, so over a genuine gap it reads the
+    // natural chasm/lakebed floor far below roadY and gets skipped there, same as a cliff.
     private static void placePair(ServerLevel overworld, double[] at, double[] perp, int minOffset,
                                     int maxOffset, Set<Long> forcedChunks) {
         int roadY = (int) Math.round(at[2]);
-        int centerX = (int) Math.round(at[0]);
-        int centerZ = (int) Math.round(at[1]);
-
-        int centerlineTerrainY = groundY(overworld, centerX, centerZ, forcedChunks);
-        if (roadY >= centerlineTerrainY) return; // the road itself is a floating bridge deck here
 
         placeSide(overworld, at, perp, maxOffset + CENTER_OFFSET, roadY, forcedChunks);
         placeSide(overworld, at, perp, minOffset - CENTER_OFFSET, roadY, forcedChunks);
