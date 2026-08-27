@@ -40,7 +40,7 @@ final class RoadBuilder {
 
     private static final int COARSE_STEP = 8;
     private static final int FINE_STEP = 4; // terrain-sampling/smoothing resolution only - see densifyForPaint for the actual paint resolution
-    private static final int MAX_NODE_EXPANSIONS = 4000;
+    private static final int MAX_NODE_EXPANSIONS = 8000;
     private static final double ELEVATION_WEIGHT = 2.0;
     private static final int BLOCKED_BOX_MARGIN = 2;
     private static final int HEADROOM = 5;
