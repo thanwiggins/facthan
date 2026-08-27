@@ -72,6 +72,10 @@ public final class CapitalRealmPlanner {
     private static final int MAX_CAPITAL_LOCATION_ROLLS = 64;
     private static final int MAX_SUPPORTING_STRUCTURE_RETRIES = 5;
     private static final int MAX_ORPHAN_STRUCTURE_RETRIES = 5;
+    // A faction listed in orphanPriorityFactions gets this many retries instead - meaningfully more
+    // persistent, so it's actually more likely to find a spot, rather than just being tried first
+    // with the same odds as everyone else.
+    private static final int PRIORITY_ORPHAN_STRUCTURE_RETRIES = 20;
     // Distinct from the attempt-index salts (1..MAX_CAPITAL_SEARCH_ATTEMPTS) and the per-faction
     // realm/orphan salts (faction.toString().hashCode()) used elsewhere in this class, so the
     // capital-count roll below never shares an RNG stream with either.
@@ -179,15 +183,18 @@ public final class CapitalRealmPlanner {
             realms.put(faction, realm);
         }
 
+        List<ResourceLocation> priorityOrphanFactions = parseOrphanPriorityFactions();
+
         List<ResourceLocation> orphanFactions = new ArrayList<>(registeredFactions);
         orphanFactions.removeAll(capitals.keySet());
+        prioritizeOrphanFactions(orphanFactions, priorityOrphanFactions);
 
         Map<ResourceLocation, List<Placement>> orphans = new LinkedHashMap<>();
         for (ResourceLocation faction : orphanFactions) {
             KingdomBootStatus.set("Searching for orphan structures...");
             RandomSource orphanRandom = RandomSource.create(mixSeed(overworld.getSeed(), faction.toString().hashCode()));
             orphans.put(faction, validateOrphans(server, overworld, structures, faction, bounds, orphanRandom,
-                    positionsOf(capitals.values()), allSupporting));
+                    positionsOf(capitals.values()), allSupporting, priorityOrphanFactions));
         }
 
         int roadAnchorOffset = KingdomConfig.ROAD_ANCHOR_OFFSET.get();
@@ -281,7 +288,7 @@ public final class CapitalRealmPlanner {
                 if (tooCloseToAny(positionsOf(placed.values()), x, z, minDistanceBetweenCapitals)) continue;
 
                 BlockPos target = new BlockPos(x, 0, z);
-                if (validateOnly(server, overworld, capitalStructure, target)) {
+                if (validateOnly(server, overworld, capitalStructure, target, bounds)) {
                     placed.put(faction, new Placement(target, capitalStructure));
                     found = true;
                 }
@@ -328,7 +335,7 @@ public final class CapitalRealmPlanner {
                 if (tooCloseToAny(positionsOf(placedThisRealm), x, z, minSeparation)) continue;
 
                 BlockPos target = new BlockPos(x, 0, z);
-                if (validateOnly(server, overworld, structure, target)) {
+                if (validateOnly(server, overworld, structure, target, bounds)) {
                     placedThisRealm.add(new Placement(target, structure));
                     allSupporting.add(target);
                     placed = true;
@@ -350,13 +357,18 @@ public final class CapitalRealmPlanner {
     // tryValidateCapitals rolls capital positions.
     private static List<Placement> validateOrphans(MinecraftServer server, ServerLevel overworld,
             FactionStructures structures, ResourceLocation faction, WorldBorderCompat.Bounds bounds,
-            RandomSource random, List<BlockPos> capitalPositions, List<BlockPos> allSupporting) {
+            RandomSource random, List<BlockPos> capitalPositions, List<BlockPos> allSupporting,
+            List<ResourceLocation> priorityFactionIds) {
         List<Structure> pool = structures.supportingStructures().get(faction);
         if (pool == null || pool.isEmpty()) return List.of();
 
         int minDistanceFromOrigin = KingdomConfig.MIN_ORPHAN_STRUCTURE_DISTANCE_FROM_ORIGIN.get();
         int minDistanceFromCapitals = KingdomConfig.MIN_ORPHAN_STRUCTURE_DISTANCE_FROM_CAPITALS.get();
         int minDistanceFromSupporting = KingdomConfig.MIN_ORPHAN_STRUCTURE_DISTANCE_FROM_SUPPORTING_STRUCTURES.get();
+        // Not just tried first (see prioritizeOrphanFactions) - also meaningfully more persistent,
+        // so a priority faction is actually more likely to find a spot at all, not just first in
+        // line with the same odds as everyone else.
+        int maxRetries = priorityFactionIds.contains(faction) ? PRIORITY_ORPHAN_STRUCTURE_RETRIES : MAX_ORPHAN_STRUCTURE_RETRIES;
 
         List<Placement> placedForFaction = new ArrayList<>();
 
@@ -365,7 +377,7 @@ public final class CapitalRealmPlanner {
         for (Structure structure : pool) {
             boolean placed = false;
 
-            for (int retry = 0; retry < MAX_ORPHAN_STRUCTURE_RETRIES && !placed; retry++) {
+            for (int retry = 0; retry < maxRetries && !placed; retry++) {
                 int x = random.nextIntBetweenInclusive(bounds.minX(), bounds.maxX());
                 int z = random.nextIntBetweenInclusive(bounds.minZ(), bounds.maxZ());
 
@@ -374,7 +386,7 @@ public final class CapitalRealmPlanner {
                 if (tooCloseToAny(allSupporting, x, z, minDistanceFromSupporting)) continue;
 
                 BlockPos target = new BlockPos(x, 0, z);
-                if (validateOnly(server, overworld, structure, target)) {
+                if (validateOnly(server, overworld, structure, target, bounds)) {
                     placedForFaction.add(new Placement(target, structure));
                     allSupporting.add(target);
                     placed = true;
@@ -382,11 +394,43 @@ public final class CapitalRealmPlanner {
             }
 
             if (!placed) {
-                LOGGER.warn("Gave up on an orphan structure for {} after {} retries.", faction, MAX_ORPHAN_STRUCTURE_RETRIES);
+                LOGGER.warn("Gave up on an orphan structure for {} after {} retries.", faction, maxRetries);
             }
         }
 
         return placedForFaction;
+    }
+
+    // orphanPriorityFactions, parsed once per planAndForceGenerate call and reused both for
+    // reordering (below) and for the extended retry budget validateOrphans gives these factions -
+    // invalid or unparseable entries are silently dropped, same graceful-degradation style as the
+    // rest of Facthan's datapack-driven config.
+    private static List<ResourceLocation> parseOrphanPriorityFactions() {
+        List<ResourceLocation> ids = new ArrayList<>();
+        for (String id : KingdomConfig.ORPHAN_PRIORITY_FACTIONS.get()) {
+            ResourceLocation parsed = ResourceLocation.tryParse(id);
+            if (parsed != null) ids.add(parsed);
+        }
+        return ids;
+    }
+
+    // Moves every faction listed in priorityFactionIds to the front, in the order configured, ahead
+    // of every other orphan faction - each orphan faction's structures have to avoid every earlier
+    // orphan's already-claimed positions (see validateOrphans' shared allSupporting list), so
+    // processing order is what actually decides who gets first pick when space is tight.
+    private static void prioritizeOrphanFactions(List<ResourceLocation> orphanFactions, List<ResourceLocation> priorityFactionIds) {
+        if (priorityFactionIds.isEmpty()) return;
+
+        List<ResourceLocation> reordered = new ArrayList<>(orphanFactions.size());
+        for (ResourceLocation id : priorityFactionIds) {
+            if (orphanFactions.remove(id)) {
+                reordered.add(id);
+            }
+        }
+        reordered.addAll(orphanFactions);
+
+        orphanFactions.clear();
+        orphanFactions.addAll(reordered);
     }
 
     private static boolean tooCloseToAny(Iterable<BlockPos> positions, int x, int z, int minDistance) {
@@ -407,7 +451,14 @@ public final class CapitalRealmPlanner {
     // /place structure's deliberate "always valid" bypass, per this design's "meets ALL the criteria
     // for generation" requirement (see desired-results.md) - a capital should only ever land somewhere
     // that would have generated there naturally, we're just not leaving it to chance.
-    private static boolean validateOnly(MinecraftServer server, ServerLevel overworld, Structure structure, BlockPos target) {
+    //
+    // The candidate (x, z) rolled by the caller is only ever the structure's ORIGIN - its real
+    // bounding box (only known once generate() actually runs) can extend well past that origin in
+    // any direction, so checking just the origin against the world border let structures generate
+    // straddling it, part inside and part out. Checking the real box's own min/max corners instead
+    // catches that regardless of how large the structure turns out to be or which way it's rotated.
+    private static boolean validateOnly(MinecraftServer server, ServerLevel overworld, Structure structure,
+                                          BlockPos target, WorldBorderCompat.Bounds bounds) {
         ServerChunkCache chunkSource = overworld.getChunkSource();
         ChunkGenerator generator = chunkSource.getGenerator();
         RandomState randomState = chunkSource.randomState();
@@ -419,7 +470,10 @@ public final class CapitalRealmPlanner {
                 templateManager, overworld.getSeed(), chunkPos, 0, overworld, structure.biomes()::contains
         );
 
-        return start.isValid();
+        if (!start.isValid()) return false;
+
+        BoundingBox box = start.getBoundingBox();
+        return bounds.contains(box.minX(), box.minZ()) && bounds.contains(box.maxX(), box.maxZ());
     }
 
     // The actual force-generation, run only after the whole batch (this capital and every one of its

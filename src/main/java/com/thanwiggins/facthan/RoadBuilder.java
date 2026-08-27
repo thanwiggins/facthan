@@ -2,6 +2,7 @@ package com.thanwiggins.facthan;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
@@ -38,10 +39,10 @@ import java.util.Set;
 final class RoadBuilder {
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    private static final int COARSE_STEP = 8;
+    private static final int COARSE_STEP = 16;
     private static final int FINE_STEP = 4; // terrain-sampling/smoothing resolution only - see densifyForPaint for the actual paint resolution
     private static final int MAX_NODE_EXPANSIONS = 8000;
-    private static final double ELEVATION_WEIGHT = 2.0;
+    private static final double ELEVATION_WEIGHT = 1.0;
     private static final int BLOCKED_BOX_MARGIN = 2;
     private static final int HEADROOM = 5;
 
@@ -49,7 +50,7 @@ final class RoadBuilder {
     // once in connectRealm so buildRoad/paveColumn don't have to carry a long, growing parameter
     // list every time a new road-styling knob gets added.
     private record RoadContext(RoadMaterialRegistry.RoadPalette fallbackPalette, RandomSource random,
-                                int width, int slopeRise, int slopeRun) {}
+                                int width, int slopeRise, int slopeRun, int pierInterval, int pierMaxHeight) {}
 
     private RoadBuilder() {}
 
@@ -64,7 +65,8 @@ final class RoadBuilder {
                 List.of(fallbackInner), List.of(fallbackOuter), List.of(fallbackBridge));
 
         RoadContext ctx = new RoadContext(fallbackPalette, overworld.getRandom(), KingdomConfig.ROAD_WIDTH.get(),
-                KingdomConfig.ROAD_MAX_SLOPE_RISE.get(), KingdomConfig.ROAD_MAX_SLOPE_RUN.get());
+                KingdomConfig.ROAD_MAX_SLOPE_RISE.get(), KingdomConfig.ROAD_MAX_SLOPE_RUN.get(),
+                KingdomConfig.ROAD_BRIDGE_PIER_INTERVAL.get(), KingdomConfig.ROAD_BRIDGE_PIER_MAX_HEIGHT.get());
 
         ServerChunkCache chunkSource = overworld.getChunkSource();
         ChunkGenerator generator = chunkSource.getGenerator();
@@ -148,13 +150,21 @@ final class RoadBuilder {
         Set<Long> painted = new HashSet<>();
         for (int offset : laneOffsetsCenterOut(minOffset, maxOffset)) {
             boolean isOuterEdge = offset == minOffset || offset == maxOffset;
-            for (double[][] segment : segments) {
+            // Support piers drop from the two outer edge lanes (not the centerline - a pair of
+            // edge piers reads far more like a real bridge than one dead-center pillar), at most
+            // every pierInterval segments (each segment is ~1 block long, so this is ~1 block per
+            // unit of interval) - see paveColumn for why every other lane, and every other position
+            // along these two, gets no support at all, just a bare deck.
+            boolean isPierLane = isOuterEdge;
+            for (int i = 0; i < segments.size(); i++) {
+                double[][] segment = segments.get(i);
                 double[] a = segment[0];
                 double[] b = segment[1];
                 double[] perp = perpendicular(a, b);
                 double[] laneA = {a[0] + perp[0] * offset, a[1] + perp[1] * offset, a[2]};
                 double[] laneB = {b[0] + perp[0] * offset, b[1] + perp[1] * offset, b[2]};
-                paveLaneCapsule(overworld, laneA, laneB, ctx, forcedChunks, painted, isOuterEdge);
+                boolean allowPier = isPierLane && (i % ctx.pierInterval() == 0);
+                paveLaneCapsule(overworld, laneA, laneB, ctx, forcedChunks, painted, isOuterEdge, allowPier);
             }
         }
 
@@ -219,7 +229,7 @@ final class RoadBuilder {
     // is made once) and to avoid redundant work. isOuterEdge is fixed for the whole lane - it's a
     // property of which offset this lane is, not of any individual cell's own distance.
     private static void paveLaneCapsule(ServerLevel overworld, double[] a, double[] b, RoadContext ctx,
-                                          Set<Long> forcedChunks, Set<Long> painted, boolean isOuterEdge) {
+                                          Set<Long> forcedChunks, Set<Long> painted, boolean isOuterEdge, boolean allowPier) {
         double abx = b[0] - a[0];
         double abz = b[1] - a[1];
         double abLenSq = abx * abx + abz * abz;
@@ -243,13 +253,13 @@ final class RoadBuilder {
 
                 painted.add(key);
                 int roadY = (int) Math.round(a[2] + tc * (b[2] - a[2]));
-                paveColumn(overworld, x, z, roadY, ctx, forcedChunks, isOuterEdge);
+                paveColumn(overworld, x, z, roadY, ctx, forcedChunks, isOuterEdge, allowPier);
             }
         }
     }
 
     private static void paveColumn(ServerLevel overworld, int x, int z, int roadY, RoadContext ctx,
-                                     Set<Long> forcedChunks, boolean isOuterEdge) {
+                                     Set<Long> forcedChunks, boolean isOuterEdge, boolean allowPier) {
         long chunkKey = pack(x >> 4, z >> 4);
         if (forcedChunks.add(chunkKey)) {
             overworld.getChunk(x >> 4, z >> 4);
@@ -258,18 +268,31 @@ final class RoadBuilder {
         // Same "-1" conversion as rawHeights above, so terrainY and roadY are directly comparable
         // as the same "solid block the road surface sits at" convention - without it, every road
         // would sit one block above the natural ground even on perfectly flat terrain.
-        int terrainY = overworld.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
+        //
+        // OCEAN_FLOOR, not WORLD_SURFACE - WORLD_SURFACE counts a water/lava surface as "terrain",
+        // so over open water this used to report the waterline itself rather than the real lakebed
+        // far below. That made the "gap" fill above only ever bridge the thin sliver between the
+        // road and the water's surface, leaving the water (and whatever's under it) completely
+        // unsupported - a bridge that looked solid right at the waterline but had nothing actually
+        // holding it up. OCEAN_FLOOR ignores fluids and reports the real solid ground underneath, so
+        // the fill below now correctly recognizes the true depth of the gap and fills all the way
+        // down to it; on dry land, with no fluid involved, this is identical to WORLD_SURFACE.
+        int terrainY = overworld.getHeight(Heightmap.Types.OCEAN_FLOOR, x, z) - 1;
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
         RoadMaterialRegistry.RoadPalette palette = paletteAt(overworld, x, roadY, z, ctx.fallbackPalette());
 
         if (roadY >= terrainY) {
-            // Bridging a gap - a fully solid fill under every column, so a bridge is always
-            // reliably passable rather than a floating deck with periodic support.
-            List<BlockState> bridgeMaterial = pick(palette.bridge(), ctx.fallbackPalette().bridge());
-            BlockState bridge = bridgeMaterial.get(ctx.random().nextInt(bridgeMaterial.size()));
-            for (int y = terrainY + 1; y < roadY; y++) {
-                overworld.setBlock(cursor.set(x, y, z), bridge, 2);
+            // Bridging a gap - the deck itself (placed unconditionally below, same as any other
+            // column) is always solid and continuous, so the pathway is always fully walkable. The
+            // support underneath it isn't: only the two outer edge lanes, only every pierInterval
+            // blocks, drop an actual pier down to the real ground - everywhere else (including the
+            // inner lanes at those same positions) is a bare floating deck, like a real beam
+            // bridge's periodic edge piers rather than a solid wall filling the entire gap.
+            if (allowPier) {
+                List<BlockState> bridgeMaterial = pick(palette.bridge(), ctx.fallbackPalette().bridge());
+                BlockState bridge = bridgeMaterial.get(ctx.random().nextInt(bridgeMaterial.size()));
+                placePier(overworld, x, roadY - 1, z, bridge, ctx.pierMaxHeight());
             }
         } else {
             for (int y = roadY + 1; y <= terrainY; y++) {
@@ -291,6 +314,20 @@ final class RoadBuilder {
 
         for (int y = roadY + 1; y <= roadY + HEADROOM; y++) {
             overworld.setBlock(cursor.set(x, y, z), Blocks.AIR.defaultBlockState(), 2);
+        }
+    }
+
+    // Drops a single-column pier straight down from just under the deck, stopping the moment it
+    // hits a sturdy-up-facing block (real ground - the pier only needs to reach it, not bury into
+    // it) or after pierMaxHeight blocks, whichever comes first - a safety cap so a pier over a
+    // genuinely deep gap doesn't descend forever.
+    private static void placePier(ServerLevel overworld, int x, int fromY, int z, BlockState pierMaterial, int maxHeight) {
+        int minY = Math.max(overworld.getMinBuildHeight(), fromY - maxHeight);
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        for (int y = fromY; y >= minY; y--) {
+            cursor.set(x, y, z);
+            if (overworld.getBlockState(cursor).isFaceSturdy(overworld, cursor, Direction.UP)) break;
+            overworld.setBlock(cursor, pierMaterial, 2);
         }
     }
 

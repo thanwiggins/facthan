@@ -1,4 +1,5 @@
 {
-  "outer": ["minecraft:mossy_cobblestone"],
-  "bridge": ["minecraft:jungle_planks"]
+  "bridge": [
+    "minecraft:jungle_planks"
+  ]
 }

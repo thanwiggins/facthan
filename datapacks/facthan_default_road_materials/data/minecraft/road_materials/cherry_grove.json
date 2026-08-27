@@ -1,4 +1,5 @@
 {
-  "outer": ["minecraft:cobblestone"],
-  "bridge": ["minecraft:cherry_planks"]
+  "bridge": [
+    "minecraft:cherry_planks"
+  ]
 }
