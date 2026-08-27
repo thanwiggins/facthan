@@ -38,6 +38,9 @@ public class KingdomConfig {
     public static final ForgeConfigSpec.IntValue ROAD_MAX_SLOPE_RISE;
     public static final ForgeConfigSpec.IntValue ROAD_MAX_SLOPE_RUN;
 
+    public static final ForgeConfigSpec.BooleanValue ENABLE_PATH_LIGHTS;
+    public static final ForgeConfigSpec.IntValue PATH_LIGHT_SPACING;
+
     static {
         BUILDER.push("Kingdom Generation Settings");
 
@@ -141,6 +144,13 @@ public class KingdomConfig {
 
         ROAD_MAX_SLOPE_RUN = BUILDER.comment("See roadMaxSlopeRise.")
                 .defineInRange("roadMaxSlopeRun", 2, 1, 16);
+
+        ENABLE_PATH_LIGHTS = BUILDER.comment("Whether to place a pair of path lights (one on each outer edge) along every generated " +
+                        "road, spaced pathLightSpacing blocks apart. Has no effect if enableRoads is false.")
+                .define("enablePathLights", true);
+
+        PATH_LIGHT_SPACING = BUILDER.comment("How far apart, in blocks measured along a road, a pair of path lights is placed.")
+                .defineInRange("pathLightSpacing", 20, 4, 256);
 
         BUILDER.pop();
 

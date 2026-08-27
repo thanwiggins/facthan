@@ -165,6 +165,8 @@ final class RoadBuilder {
             }
         }
 
+        PathLightBuilder.placeAlongRoad(overworld, paint, minOffset, maxOffset, forcedChunks);
+
         return true;
     }
 
@@ -181,8 +183,9 @@ final class RoadBuilder {
     }
 
     // Unit vector perpendicular to a->b, in the XZ plane - (0, 1) for a degenerate (zero-length)
-    // segment, an arbitrary but consistent fallback for the size-1 "paint" edge case.
-    private static double[] perpendicular(double[] a, double[] b) {
+    // segment, an arbitrary but consistent fallback for the size-1 "paint" edge case. Package-visible
+    // so PathLightBuilder can place lights relative to the same lane geometry roads themselves use.
+    static double[] perpendicular(double[] a, double[] b) {
         double dx = b[0] - a[0];
         double dz = b[1] - a[1];
         double len = Math.hypot(dx, dz);

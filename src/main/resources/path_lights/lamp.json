@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "name": "Path Light",
+    "dimensions": { "width": 3, "height": 7, "depth": 3 },
+    "total_blocks": 25
+  },
+  "coordinate_system": {
+    "origin": "Bottom-North-West corner",
+    "axes": "x: 0-2 (West to East), y: 0-6 (Bottom to Top), z: 0-2 (North to South)"
+  },
+  "blocks": [
+    { "x": 1, "y": 0, "z": 1, "block": "minecraft:oak_log", "properties": { "axis": "y" } },
+    { "x": 1, "y": 0, "z": 0, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "north", "half": "bottom" } },
+    { "x": 1, "y": 0, "z": 2, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "south", "half": "bottom" } },
+    { "x": 2, "y": 0, "z": 1, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "east", "half": "bottom" } },
+    { "x": 0, "y": 0, "z": 1, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "west", "half": "bottom" } },
+
+    { "x": 1, "y": 1, "z": 1, "block": "minecraft:oak_fence" },
+
+    { "x": 1, "y": 2, "z": 1, "block": "minecraft:oak_log", "properties": { "axis": "y" } },
+    { "x": 0, "y": 2, "z": 1, "block": "minecraft:oak_slab", "properties": { "type": "bottom" } },
+    { "x": 2, "y": 2, "z": 1, "block": "minecraft:oak_slab", "properties": { "type": "bottom" } },
+
+    { "x": 1, "y": 3, "z": 1, "block": "minecraft:oak_fence" },
+
+    { "x": 1, "y": 4, "z": 1, "block": "minecraft:oak_log", "properties": { "axis": "y" } },
+    { "x": 1, "y": 4, "z": 0, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "north", "half": "top" } },
+    { "x": 1, "y": 4, "z": 2, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "south", "half": "top" } },
+    { "x": 2, "y": 4, "z": 1, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "east", "half": "top" } },
+    { "x": 0, "y": 4, "z": 1, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "west", "half": "top" } },
+
+    { "x": 1, "y": 5, "z": 1, "block": "minecraft:campfire", "properties": { "lit": "true" } },
+    { "x": 1, "y": 5, "z": 0, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "north", "half": "bottom" } },
+    { "x": 1, "y": 5, "z": 2, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "south", "half": "bottom" } },
+    { "x": 2, "y": 5, "z": 1, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "east", "half": "bottom" } },
+    { "x": 0, "y": 5, "z": 1, "block": "minecraft:stone_brick_stairs", "properties": { "facing": "west", "half": "bottom" } },
+
+    { "x": 1, "y": 6, "z": 0, "block": "minecraft:oak_fence" },
+    { "x": 1, "y": 6, "z": 2, "block": "minecraft:oak_fence" },
+    { "x": 2, "y": 6, "z": 1, "block": "minecraft:oak_fence" },
+    { "x": 0, "y": 6, "z": 1, "block": "minecraft:oak_fence" }
+  ]
+}
