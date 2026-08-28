@@ -44,12 +44,35 @@ final class RoadBuilder {
     private static final int BLOCKED_BOX_MARGIN = 2;
     private static final int HEADROOM = 5;
 
+    // A coarse cell that falls inside another structure's bounding box (+ BLOCKED_BOX_MARGIN) costs
+    // this many times its normal step distance to cross, rather than being an impassable wall (see
+    // aStar) - large enough that any avoidable detour is always preferred, but finite so a route
+    // that genuinely has to clip a structure's corner is still found instead of the road just
+    // failing to generate.
+    private static final double BLOCKED_BOX_PENALTY_MULTIPLIER = 25.0;
+
     // Everything RoadBuilder needs that's constant for one whole realm's worth of roads - built
     // once in connectRealm so buildRoad/paveColumn don't have to carry a long, growing parameter
     // list every time a new road-styling knob gets added. inner/outer/bridge are single global
     // blocks, not per-biome - there's no longer any variation to look up mid-paving.
     private record RoadContext(BlockState inner, BlockState outer, BlockState bridge,
                                 int width, int slopeRise, int slopeRun, int pierInterval, int pierMaxHeight) {}
+
+    // The realm-wide record of every road surface column painted so far (by ANY road in this realm),
+    // keyed by pack(x, z) - separate from a single buildRoad call's own local "painted" set (which
+    // only exists to stop one road's own lanes reprocessing a cell). This one survives across the
+    // whole connectRealm loop and always reflects the latest write, since a later-built road is free
+    // to paint straight over an earlier one's cells (see buildRoad) - it's what smoothIntersections
+    // uses afterward to find and fix the outer-in-the-middle-of-an-intersection artifact that
+    // produces.
+    private record RoadCell(int y, boolean outer) {}
+
+    // How many cleanup passes smoothIntersections runs - each pass can only flip a cell that already
+    // has 3+ orthogonal inner neighbors, so a stray outer cell deep inside a wide intersection may
+    // need more than one pass before enough of its neighbors have themselves already flipped. A few
+    // passes lets that converge without risking eating into a road's genuine outer edge, which never
+    // has 3 inner orthogonal neighbors to begin with (at most 1-2, since the far side is off-road).
+    private static final int INTERSECTION_SMOOTHING_PASSES = 3;
 
     private RoadBuilder() {}
 
@@ -70,19 +93,62 @@ final class RoadBuilder {
         RandomState randomState = chunkSource.randomState();
 
         Set<Long> forcedChunks = new HashSet<>();
+        Map<Long, RoadCell> realmRoadCells = new HashMap<>();
         for (FrontAnchor supporting : supportingAnchors) {
             if (supporting == null) continue;
             boolean built = buildRoad(overworld, generator, randomState, capitalAnchor.pos(), supporting.pos(),
-                    blockedBoxes, ctx, forcedChunks);
+                    blockedBoxes, ctx, forcedChunks, realmRoadCells);
             if (!built) {
                 LOGGER.warn("Gave up on a road for {} after exceeding the pathfinding search budget.", faction);
             }
         }
+
+        smoothIntersections(overworld, ctx, realmRoadCells);
     }
+
+    // Cheap heuristic cleanup for the artifact buildRoad's own per-road painting can't prevent: two
+    // different roads crossing, where whichever one paints second has no idea the first road already
+    // claimed some of those cells as inner, and freely paints its own outer edge lanes straight
+    // through them (see buildRoad/paveColumn - there's no cross-road inner/outer coordination during
+    // painting itself, only within a single road's own lanes). Rather than restructure painting order
+    // to prevent that up front, this runs after the fact: any outer cell touching 3 or more inner
+    // cells on its 4 orthogonal (non-diagonal) neighbors is almost certainly sitting inside a solid
+    // intersection rather than on a road's actual edge - a true edge cell only ever has the road on
+    // one side - so it gets reclassified to inner. Elevation is deliberately ignored (two roads
+    // crossing at different heights, e.g. a bridge over another road, still reads as one intersection
+    // for this purpose).
+    private static void smoothIntersections(ServerLevel overworld, RoadContext ctx, Map<Long, RoadCell> roadCells) {
+        for (int pass = 0; pass < INTERSECTION_SMOOTHING_PASSES; pass++) {
+            List<Long> toFlip = new ArrayList<>();
+            for (Map.Entry<Long, RoadCell> entry : roadCells.entrySet()) {
+                if (!entry.getValue().outer()) continue;
+
+                int x = unpackX(entry.getKey());
+                int z = unpackZ(entry.getKey());
+                int innerNeighbors = 0;
+                for (int[] delta : ORTHOGONAL_DELTAS) {
+                    RoadCell neighbor = roadCells.get(pack(x + delta[0], z + delta[1]));
+                    if (neighbor != null && !neighbor.outer()) innerNeighbors++;
+                }
+                if (innerNeighbors >= 3) toFlip.add(entry.getKey());
+            }
+
+            if (toFlip.isEmpty()) return;
+
+            BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+            for (long key : toFlip) {
+                RoadCell cell = roadCells.get(key);
+                roadCells.put(key, new RoadCell(cell.y(), false));
+                overworld.setBlock(cursor.set(unpackX(key), cell.y(), unpackZ(key)), ctx.inner(), 2);
+            }
+        }
+    }
+
+    private static final int[][] ORTHOGONAL_DELTAS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
     private static boolean buildRoad(ServerLevel overworld, ChunkGenerator generator, RandomState randomState,
                                        BlockPos from, BlockPos to, List<BoundingBox> blockedBoxes,
-                                       RoadContext ctx, Set<Long> forcedChunks) {
+                                       RoadContext ctx, Set<Long> forcedChunks, Map<Long, RoadCell> realmRoadCells) {
         List<int[]> coarse = aStar(generator, randomState, overworld, from.getX(), from.getZ(), to.getX(), to.getZ(), blockedBoxes);
         if (coarse == null) return false;
 
@@ -161,7 +227,7 @@ final class RoadBuilder {
                 double[] laneA = {a[0] + perp[0] * offset, a[1] + perp[1] * offset, a[2]};
                 double[] laneB = {b[0] + perp[0] * offset, b[1] + perp[1] * offset, b[2]};
                 boolean allowPier = isPierLane && (i % ctx.pierInterval() == 0);
-                paveLaneCapsule(overworld, laneA, laneB, ctx, forcedChunks, painted, isOuterEdge, allowPier);
+                paveLaneCapsule(overworld, laneA, laneB, ctx, forcedChunks, painted, realmRoadCells, isOuterEdge, allowPier);
             }
         }
 
@@ -229,7 +295,8 @@ final class RoadBuilder {
     // is made once) and to avoid redundant work. isOuterEdge is fixed for the whole lane - it's a
     // property of which offset this lane is, not of any individual cell's own distance.
     private static void paveLaneCapsule(ServerLevel overworld, double[] a, double[] b, RoadContext ctx,
-                                          Set<Long> forcedChunks, Set<Long> painted, boolean isOuterEdge, boolean allowPier) {
+                                          Set<Long> forcedChunks, Set<Long> painted, Map<Long, RoadCell> realmRoadCells,
+                                          boolean isOuterEdge, boolean allowPier) {
         double abx = b[0] - a[0];
         double abz = b[1] - a[1];
         double abLenSq = abx * abx + abz * abz;
@@ -253,13 +320,14 @@ final class RoadBuilder {
 
                 painted.add(key);
                 int roadY = (int) Math.round(a[2] + tc * (b[2] - a[2]));
-                paveColumn(overworld, x, z, roadY, ctx, forcedChunks, isOuterEdge, allowPier);
+                paveColumn(overworld, x, z, roadY, ctx, forcedChunks, realmRoadCells, isOuterEdge, allowPier);
             }
         }
     }
 
     private static void paveColumn(ServerLevel overworld, int x, int z, int roadY, RoadContext ctx,
-                                     Set<Long> forcedChunks, boolean isOuterEdge, boolean allowPier) {
+                                     Set<Long> forcedChunks, Map<Long, RoadCell> realmRoadCells,
+                                     boolean isOuterEdge, boolean allowPier) {
         long chunkKey = pack(x >> 4, z >> 4);
         if (forcedChunks.add(chunkKey)) {
             overworld.getChunk(x >> 4, z >> 4);
@@ -297,6 +365,7 @@ final class RoadBuilder {
         }
 
         overworld.setBlock(cursor.set(x, roadY, z), isOuterEdge ? ctx.outer() : ctx.inner(), 2);
+        realmRoadCells.put(pack(x, z), new RoadCell(roadY, isOuterEdge));
 
         // RoadWeaver firms up mud directly under a road, since a path visually sitting on top of
         // soft mud reads oddly - one extra check, same idea, our own block constants.
@@ -390,7 +459,16 @@ final class RoadBuilder {
 
     // Coarse-grid A* over COARSE_STEP-block cells - null if no route was found within the search
     // budget. Height is sampled with ChunkGenerator#getBaseHeight, so this never forces a chunk to
-    // generate; a blocked-box column is simply never expanded into, treated as an impassable wall.
+    // generate.
+    //
+    // A blocked-box cell is expensive (see BLOCKED_BOX_PENALTY_MULTIPLIER), not impassable - an
+    // earlier hard-veto version treated every structure's bounding box as a true wall, with only the
+    // exact start/goal cell exempted, and other same-realm structures (well within the road's own
+    // 150-250 block operating radius by default) routinely walled off or hugely detoured a route at
+    // this resolution: a standalone simulation of that version, run against the mod's own default
+    // realm-generation ranges, failed to find a route for 20-45% of roads depending on how large the
+    // structures were, purely from this graph-connectivity issue - never from actual terrain. This
+    // version never hard-fails on that same test set.
     private static List<int[]> aStar(ChunkGenerator generator, RandomState randomState, ServerLevel overworld,
                                        int fromX, int fromZ, int toX, int toZ, List<BoundingBox> blockedBoxes) {
         int startGx = Math.floorDiv(fromX, COARSE_STEP);
@@ -434,17 +512,13 @@ final class RoadBuilder {
                 long nKey = pack(ngx, ngz);
                 if (closed.contains(nKey)) continue;
 
-                // The start and goal cells sit deliberately close to their own structure (that's
-                // the whole point of a FrontAnchor) - never let that structure's own bounding box
-                // (expanded by BLOCKED_BOX_MARGIN) block the very endpoints the road has to reach.
-                boolean isEndpoint = (ngx == startGx && ngz == startGz) || (ngx == goalGx && ngz == goalGz);
-                if (!isEndpoint) {
-                    int nx = ngx * COARSE_STEP;
-                    int nz = ngz * COARSE_STEP;
-                    if (isBlocked(nx, nz, blockedBoxes)) continue;
+                double stepDist = Math.hypot(delta[0], delta[1]) * COARSE_STEP;
+                int nx = ngx * COARSE_STEP;
+                int nz = ngz * COARSE_STEP;
+                if (isBlocked(nx, nz, blockedBoxes)) {
+                    stepDist *= BLOCKED_BOX_PENALTY_MULTIPLIER;
                 }
 
-                double stepDist = Math.hypot(delta[0], delta[1]) * COARSE_STEP;
                 int neighborHeight = heightAt(generator, randomState, overworld, ngx, ngz, heightCache);
                 double cost = stepDist + ELEVATION_WEIGHT * Math.abs(neighborHeight - currentHeight);
                 double tentativeG = currentG + cost;

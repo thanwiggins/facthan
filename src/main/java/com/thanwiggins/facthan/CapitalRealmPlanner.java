@@ -2,6 +2,7 @@ package com.thanwiggins.facthan;
 
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
@@ -12,10 +13,13 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.StructureManager;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.ChunkStatus;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.RandomState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.Structure;
@@ -75,7 +79,7 @@ public final class CapitalRealmPlanner {
     // A faction listed in orphanPriorityFactions gets this many retries instead - meaningfully more
     // persistent, so it's actually more likely to find a spot, rather than just being tried first
     // with the same odds as everyone else.
-    private static final int PRIORITY_ORPHAN_STRUCTURE_RETRIES = 20;
+    private static final int PRIORITY_ORPHAN_STRUCTURE_RETRIES = 50;
     // Distinct from the attempt-index salts (1..MAX_CAPITAL_SEARCH_ATTEMPTS) and the per-faction
     // realm/orphan salts (faction.toString().hashCode()) used elsewhere in this class, so the
     // capital-count roll below never shares an RNG stream with either.
@@ -556,7 +560,33 @@ public final class CapitalRealmPlanner {
             ForcedPlacementGuard.allow(start);
         }
 
+        applySnowIfSnowy(overworld, box);
+
         return new GeneratedPlacement(box, extractRotation(start));
+    }
+
+    // Vanilla's own "ice and snow" feature is what normally caps a snowy biome's terrain during
+    // ordinary generation - but it runs as part of the FEATURES stage, strictly before
+    // start.placeInChunk() above overwrites that same ground with the structure itself, so whatever
+    // snow it laid down under/around the structure's footprint is gone by the time this method
+    // returns. This reapplies it, once, on top of the now-finished structure, using the same
+    // per-column rule vanilla's own snow layer placement uses: the biome at that exact column has to
+    // be cold enough to snow there (getPrecipitationAt, not just the biome's nominal classification -
+    // this also accounts for height/temperature falloff), and the position has to be a legal spot for
+    // a snow layer (SnowLayerBlock's own canSurvive - skips water, leaves that don't want it, etc.).
+    private static void applySnowIfSnowy(ServerLevel overworld, BoundingBox box) {
+        BlockPos.MutableBlockPos column = new BlockPos.MutableBlockPos();
+        for (int x = box.minX(); x <= box.maxX(); x++) {
+            for (int z = box.minZ(); z <= box.maxZ(); z++) {
+                BlockPos surfacePos = overworld.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, column.set(x, 0, z));
+                Holder<Biome> biome = overworld.getBiome(surfacePos);
+                if (biome.value().getPrecipitationAt(surfacePos) != Biome.Precipitation.SNOW) continue;
+                if (!overworld.getBlockState(surfacePos).isAir()) continue;
+                if (!Blocks.SNOW.defaultBlockState().canSurvive(overworld, surfacePos)) continue;
+
+                overworld.setBlock(surfacePos, Blocks.SNOW.defaultBlockState(), 2);
+            }
+        }
     }
 
     // The real-world rotation this structure ended up with - only meaningful for the common case
