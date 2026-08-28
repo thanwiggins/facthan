@@ -517,34 +517,60 @@ public final class CapitalRealmPlanner {
 
         StructureManager structureManager = overworld.structureManager();
 
-        // Pass 0: register the start onto every touched chunk while each is still at EMPTY (cheap -
-        // no generation work happens at that status), before ANY of them advance further - the same
-        // "all chunks see the same picture" principle pass 1 below already relies on, just moved
-        // earlier. This is what lets terrain_adaptation/beard_box - which reads a chunk's structure
-        // data during its own NOISE stage - actually see this structure while shaping terrain around
-        // it, instead of finding nothing (see ForcedPlacementGuard's own comment for the full story).
-        // Marked "pending" so StructureStartPlacementGuardMixin cancels the unconditional
-        // auto-placement call vanilla's own FEATURES stage will otherwise make on this exact start
-        // during pass 1 - without that guard, this would reintroduce the entity-duplication bug this
-        // exact registration-ordering already caused once before (see this method's own history).
+        // Pass 0: register the real start onto the origin chunk while it's still at EMPTY (cheap -
+        // no generation work happens at that status), before any touched chunk advances further -
+        // the same "all chunks see the same picture" principle pass 1 below already relies on, just
+        // moved earlier. Only the true origin chunk (the one Structure#generate was called against,
+        // above) ever gets setStartForStructure - no other touched chunk gets anything registered
+        // here at all.
+        //
+        // An earlier version of this loop called setStartForStructure on every touched chunk
+        // unconditionally. That's what chunk.getAllStarts() - the standard, documented way to
+        // enumerate a chunk's structures, used by this mod's own placement code and by third-party
+        // mods alike (e.g. mcaichat's NPC world-knowledge scanner) - is supposed to report exactly
+        // once per structure, at its origin, the way vanilla guarantees for every other structure in
+        // the game; registering it everywhere produced duplicated structure entries/prompt lines for
+        // any castle spanning more than one chunk.
+        //
+        // The fix that followed - manually adding an explicit reference (addReferenceForStructure)
+        // from every OTHER touched chunk straight to the origin - corrected that, but crashed world
+        // generation instead: pass 1 below forces each touched chunk through its own FEATURES stage,
+        // which resolves this structure via StructureManager#startsForStructure and, for any resolved
+        // reference, force-loads the chunk it points to (verified against decompiled
+        // ChunkGenerator#applyBiomeDecoration/StructureManager#fillStartsForStructure) - through a
+        // WorldGenRegion that only has a small, engine-fixed margin around the chunk currently being
+        // decorated. A reference pointing directly at a far-away origin (any castle wider than that
+        // margin) asks that region for a chunk outside its bounds and crashes generation entirely
+        // ("We are asking a region for a chunk out of bound").
+        //
+        // Registering nothing at all for non-origin chunks avoids that: vanilla's own
+        // ChunkGenerator#createReferences already runs automatically as each of those chunks is
+        // forced to FULL below, and it discovers the origin's start (already registered here, before
+        // any of them advance) via its own internal neighbor sweep - one that's hard-capped at the
+        // exact radius its own WorldGenRegion margin is sized to match, so it can never trigger this
+        // same crash. This costs terrain_adaptation/beard_box's reach for any piece far enough from
+        // the origin that even vanilla's own sweep wouldn't find it either - an inherent engine limit
+        // for a structure this large, not a regression: forcing a longer-reaching reference (the
+        // previous approach) doesn't extend that limit, it just crashes instead of quietly not
+        // reaching.
         ForcedPlacementGuard.markPending(start);
         try {
-            for (ChunkPos chunkPos : touchedChunks) {
-                ChunkAccess emptyChunk = chunkSource.getChunk(chunkPos.x, chunkPos.z, ChunkStatus.EMPTY, true);
-                structureManager.setStartForStructure(SectionPos.of(chunkPos, 0), structure, start, emptyChunk);
-            }
+            ChunkAccess originEmptyChunk = chunkSource.getChunk(originChunk.x, originChunk.z, ChunkStatus.EMPTY, true);
+            structureManager.setStartForStructure(SectionPos.of(originChunk, 0), structure, start, originEmptyChunk);
 
             // Pass 1: force every touched chunk the rest of the way to FULL generation status. Each
-            // one's own "structure references" stage now finds the start registered above and its
-            // "features" stage will try to auto-place it - cancelled by the guard, since it's still
-            // marked pending here.
+            // one's own "structure references" stage now finds the origin's start registered above
+            // and its "features" stage will try to auto-place it - cancelled by the guard, since it's
+            // still marked pending here.
             Map<ChunkPos, ChunkAccess> chunksByPos = new LinkedHashMap<>();
             for (ChunkPos chunkPos : touchedChunks) {
                 chunksByPos.put(chunkPos, overworld.getChunk(chunkPos.x, chunkPos.z));
             }
 
-            // Pass 2: every touched chunk is FULL and already has the start registered (pass 0) -
-            // lift the guard and place it ourselves, for real, exactly once per chunk.
+            // Pass 2: every touched chunk is FULL and this start is registered (as the real start at
+            // its origin - pass 0 - and, for whichever other touched chunks were within reach, as a
+            // reference vanilla's own createReferences added during pass 1 above) - lift the guard
+            // and place it ourselves, for real, exactly once per chunk.
             ForcedPlacementGuard.allow(start);
             for (ChunkPos chunkPos : touchedChunks) {
                 ChunkAccess chunk = chunksByPos.get(chunkPos);

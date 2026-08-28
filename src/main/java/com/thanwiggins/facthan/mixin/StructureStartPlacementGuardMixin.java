@@ -13,15 +13,18 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// CapitalRealmPlanner.forceGenerate now registers a structure's start onto its touched chunks
-// while they're still at ChunkStatus.EMPTY (see ForcedPlacementGuard's own comment for why) so that
-// terrain_adaptation/beard_box - which reads the exact same per-chunk structure-reference data
-// vanilla's own auto-placement uses - actually sees the structure while shaping terrain. The
-// unavoidable side effect: as those chunks are then forced the rest of the way to FULL, their own
-// FEATURES stage (ChunkGenerator#applyBiomeDecoration) will try to call this exact same
-// placeInChunk on its own, unconditionally - vanilla has no "already placed" bookkeeping anywhere
-// in this path to prevent it. Cancelling that specific, unwanted call - and only that one, only for
-// a start CapitalRealmPlanner itself marked pending - is what actually prevents the entity
+// CapitalRealmPlanner.forceGenerate now registers a structure's real start onto its origin chunk
+// while it's still at ChunkStatus.EMPTY (see ForcedPlacementGuard's own comment for why) so that
+// terrain_adaptation/beard_box - which resolves a chunk's nearby structures via the same reference
+// data vanilla's own auto-placement uses - actually sees the structure while shaping terrain.
+// vanilla's own ChunkGenerator#createReferences then naturally propagates that into a reference on
+// every OTHER touched chunk within its own reach as each is forced to FULL in turn. The unavoidable
+// side effect: as the origin chunk (and any other touched chunk that ends up with a reference to
+// it) is forced the rest of the way to FULL, its own FEATURES stage
+// (ChunkGenerator#applyBiomeDecoration) will try to call this exact same placeInChunk on its own,
+// unconditionally - vanilla has no "already placed" bookkeeping anywhere in this path to prevent
+// it. Cancelling that specific, unwanted call - on every chunk that attempts it, and only for a
+// start CapitalRealmPlanner itself marked pending - is what actually prevents the entity
 // duplication a naive "just register early" change would otherwise reintroduce.
 @Mixin(StructureStart.class)
 public abstract class StructureStartPlacementGuardMixin {

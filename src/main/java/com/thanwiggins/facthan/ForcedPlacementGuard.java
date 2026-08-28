@@ -5,16 +5,16 @@ import net.minecraft.world.level.levelgen.structure.StructureStart;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-// Lets CapitalRealmPlanner register a structure's start early - onto a chunk that's still at
-// ChunkStatus.EMPTY, before any of the structure's other touched chunks advance - so that when
-// those chunks are later forced the rest of the way to FULL, their own NOISE stage sees the start
-// already registered (this is what makes terrain_adaptation/beard_box actually fire, see
-// StructureStartPlacementGuardMixin's own comment for why). The unavoidable side effect of
-// registering that early is that each touched chunk's own FEATURES stage will also try to
-// auto-place the very same start via ChunkGenerator#applyBiomeDecoration - exactly the mechanism
-// that caused the entity-duplication bug this mod already fixed once (see CapitalRealmPlanner's
-// forceGenerate). This guard is how that specific auto-placement attempt gets cancelled, while
-// still letting CapitalRealmPlanner's own, single, deliberate placeInChunk call through.
+// Lets CapitalRealmPlanner register a structure's start early - onto its origin chunk, while that
+// chunk is still at ChunkStatus.EMPTY, before any of the structure's other touched chunks advance -
+// so that when those chunks are later forced the rest of the way to FULL, their own NOISE stage
+// sees the start already registered (this is what makes terrain_adaptation/beard_box actually fire,
+// see StructureStartPlacementGuardMixin's own comment for why). The unavoidable side effect of
+// registering that early is that the origin chunk's own FEATURES stage will also try to auto-place
+// the very same start via ChunkGenerator#applyBiomeDecoration - exactly the mechanism that caused
+// the entity-duplication bug this mod already fixed once (see CapitalRealmPlanner's forceGenerate).
+// This guard is how that specific auto-placement attempt gets cancelled, while still letting
+// CapitalRealmPlanner's own, single, deliberate placeInChunk call through.
 //
 // Keyed by StructureStart identity (it doesn't override equals/hashCode, so reference identity is
 // exactly what a plain ConcurrentHashMap-backed set already gives) - every call to
